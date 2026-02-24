@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"mulldb/config"
+	"mulldb/executor"
 	"mulldb/pgwire"
 )
 
@@ -19,14 +20,16 @@ type Connection struct {
 	reader *pgwire.Reader
 	writer *pgwire.Writer
 	cfg    *config.Config
+	exec   *executor.Executor
 }
 
-func newConnection(conn net.Conn, cfg *config.Config) *Connection {
+func newConnection(conn net.Conn, cfg *config.Config, exec *executor.Executor) *Connection {
 	return &Connection{
 		conn:   conn,
 		reader: pgwire.NewReader(conn),
 		writer: pgwire.NewWriter(conn),
 		cfg:    cfg,
+		exec:   exec,
 	}
 }
 
@@ -144,7 +147,6 @@ func (c *Connection) queryLoop() {
 }
 
 // handleQuery processes a single SQL query string and writes the response.
-// In Phase 1 this is a stub that returns empty results.
 func (c *Connection) handleQuery(query string) error {
 	query = strings.TrimSpace(query)
 
@@ -155,43 +157,49 @@ func (c *Connection) handleQuery(query string) error {
 		return c.sendReady()
 	}
 
-	upper := strings.ToUpper(query)
-	var err error
-
-	switch {
-	case strings.HasPrefix(upper, "SELECT"):
-		err = c.stubSelect()
-	case strings.HasPrefix(upper, "SET"):
-		err = c.writer.WriteCommandComplete("SET")
-	case strings.HasPrefix(upper, "CREATE"):
-		err = c.writer.WriteCommandComplete("CREATE TABLE")
-	case strings.HasPrefix(upper, "DROP"):
-		err = c.writer.WriteCommandComplete("DROP TABLE")
-	case strings.HasPrefix(upper, "INSERT"):
-		err = c.writer.WriteCommandComplete("INSERT 0 0")
-	case strings.HasPrefix(upper, "UPDATE"):
-		err = c.writer.WriteCommandComplete("UPDATE 0")
-	case strings.HasPrefix(upper, "DELETE"):
-		err = c.writer.WriteCommandComplete("DELETE 0")
-	default:
-		if err := c.writer.WriteErrorResponse("ERROR", "42601", "unrecognized statement"); err != nil {
+	// Handle SET commands that psql sends during startup — our parser
+	// doesn't cover SET, so we return a stub response.
+	if strings.HasPrefix(strings.ToUpper(query), "SET") {
+		if err := c.writer.WriteCommandComplete("SET"); err != nil {
 			return err
 		}
 		return c.sendReady()
 	}
 
+	// Execute via the real parser + executor + storage path.
+	result, err := c.exec.Execute(query)
 	if err != nil {
+		if werr := c.writer.WriteErrorResponse("ERROR", "42000", err.Error()); werr != nil {
+			return werr
+		}
+		return c.sendReady()
+	}
+
+	// SELECT: send RowDescription + DataRows + CommandComplete.
+	if result.Columns != nil {
+		cols := make([]pgwire.ColumnInfo, len(result.Columns))
+		for i, rc := range result.Columns {
+			cols[i] = pgwire.ColumnInfo{
+				Name:         rc.Name,
+				DataTypeOID:  rc.TypeOID,
+				DataTypeSize: rc.TypeSize,
+				TypeModifier: -1,
+			}
+		}
+		if err := c.writer.WriteRowDescription(cols); err != nil {
+			return err
+		}
+		for _, row := range result.Rows {
+			if err := c.writer.WriteDataRow(row); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := c.writer.WriteCommandComplete(result.Tag); err != nil {
 		return err
 	}
 	return c.sendReady()
-}
-
-// stubSelect sends an empty result set (no columns, no rows).
-func (c *Connection) stubSelect() error {
-	if err := c.writer.WriteRowDescription(nil); err != nil {
-		return err
-	}
-	return c.writer.WriteCommandComplete("SELECT 0")
 }
 
 // sendReady sends ReadyForQuery and flushes the write buffer.

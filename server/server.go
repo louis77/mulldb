@@ -8,20 +8,23 @@ import (
 	"sync"
 
 	"mulldb/config"
+	"mulldb/executor"
 )
 
 // Server accepts TCP connections and spawns a goroutine per client.
 type Server struct {
 	cfg      *config.Config
+	exec     *executor.Executor
 	listener net.Listener
 	wg       sync.WaitGroup
 	quit     chan struct{}
 }
 
-// New creates a server with the given configuration.
-func New(cfg *config.Config) *Server {
+// New creates a server with the given configuration and executor.
+func New(cfg *config.Config, exec *executor.Executor) *Server {
 	return &Server{
 		cfg:  cfg,
+		exec: exec,
 		quit: make(chan struct{}),
 	}
 }
@@ -52,7 +55,7 @@ func (s *Server) ListenAndServe() error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			c := newConnection(conn, s.cfg)
+			c := newConnection(conn, s.cfg, s.exec)
 			c.Handle()
 		}()
 	}

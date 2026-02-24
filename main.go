@@ -9,13 +9,22 @@ import (
 	"time"
 
 	"mulldb/config"
+	"mulldb/executor"
 	"mulldb/server"
+	"mulldb/storage"
 )
 
 func main() {
 	cfg := config.Parse()
 
-	srv := server.New(cfg)
+	eng, err := storage.Open(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("open storage: %v", err)
+	}
+	defer eng.Close()
+
+	exec := executor.New(eng)
+	srv := server.New(cfg, exec)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
