@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -169,7 +170,12 @@ func (c *Connection) handleQuery(query string) error {
 	// Execute via the real parser + executor + storage path.
 	result, err := c.exec.Execute(query)
 	if err != nil {
-		if werr := c.writer.WriteErrorResponse("ERROR", "42000", err.Error()); werr != nil {
+		code := "42000" // fallback
+		var qe *executor.QueryError
+		if errors.As(err, &qe) {
+			code = qe.Code
+		}
+		if werr := c.writer.WriteErrorResponse("ERROR", code, err.Error()); werr != nil {
 			return werr
 		}
 		return c.sendReady()

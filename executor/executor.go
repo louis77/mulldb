@@ -24,7 +24,7 @@ func New(engine storage.Engine) *Executor {
 func (e *Executor) Execute(sql string) (*Result, error) {
 	stmt, err := parser.Parse(sql)
 	if err != nil {
-		return nil, err
+		return nil, &QueryError{Code: "42601", Message: err.Error()} // syntax_error
 	}
 
 	switch s := stmt.(type) {
@@ -41,7 +41,7 @@ func (e *Executor) Execute(sql string) (*Result, error) {
 	case *parser.DeleteStmt:
 		return e.execDelete(s)
 	default:
-		return nil, fmt.Errorf("unsupported statement type %T", stmt)
+		return nil, &QueryError{Code: "42601", Message: fmt.Sprintf("unsupported statement type %T", stmt)}
 	}
 }
 
@@ -54,19 +54,19 @@ func (e *Executor) execCreateTable(s *parser.CreateTableStmt) (*Result, error) {
 	for i, c := range s.Columns {
 		dt, err := parseDataType(c.DataType)
 		if err != nil {
-			return nil, err
+			return nil, WrapError(err)
 		}
 		cols[i] = storage.ColumnDef{Name: c.Name, DataType: dt}
 	}
 	if err := e.engine.CreateTable(s.Name, cols); err != nil {
-		return nil, err
+		return nil, WrapError(err)
 	}
 	return &Result{Tag: "CREATE TABLE"}, nil
 }
 
 func (e *Executor) execDropTable(s *parser.DropTableStmt) (*Result, error) {
 	if err := e.engine.DropTable(s.Name); err != nil {
-		return nil, err
+		return nil, WrapError(err)
 	}
 	return &Result{Tag: "DROP TABLE"}, nil
 }
@@ -74,7 +74,7 @@ func (e *Executor) execDropTable(s *parser.DropTableStmt) (*Result, error) {
 func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 	def, ok := e.engine.GetTable(s.Table)
 	if !ok {
-		return nil, fmt.Errorf("table %q does not exist", s.Table)
+		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table})
 	}
 
 	rows := make([][]any, len(s.Values))
@@ -83,7 +83,7 @@ func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 		for j, expr := range exprRow {
 			v, err := evalLiteral(expr)
 			if err != nil {
-				return nil, fmt.Errorf("row %d, value %d: %w", i, j, err)
+				return nil, WrapError(fmt.Errorf("row %d, value %d: %w", i, j, err))
 			}
 			vals[j] = v
 		}
@@ -92,7 +92,7 @@ func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 
 	n, err := e.engine.Insert(s.Table, s.Columns, rows)
 	if err != nil {
-		return nil, err
+		return nil, WrapError(err)
 	}
 
 	_ = def // used above for context; insert delegates column resolution to engine
@@ -102,13 +102,13 @@ func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 	def, ok := e.engine.GetTable(s.From)
 	if !ok {
-		return nil, fmt.Errorf("table %q does not exist", s.From)
+		return nil, WrapError(&storage.TableNotFoundError{Name: s.From})
 	}
 
 	// Resolve which columns to return.
 	colIndices, resultCols, err := resolveSelectColumns(s.Columns, def)
 	if err != nil {
-		return nil, err
+		return nil, WrapError(err)
 	}
 
 	// Build the WHERE filter.
@@ -116,14 +116,14 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 	if s.Where != nil {
 		filter, err = buildFilter(s.Where, def)
 		if err != nil {
-			return nil, err
+			return nil, WrapError(err)
 		}
 	}
 
 	// Scan and filter rows.
 	it, err := e.engine.Scan(s.From)
 	if err != nil {
-		return nil, err
+		return nil, WrapError(err)
 	}
 	defer it.Close()
 
@@ -153,7 +153,7 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 	def, ok := e.engine.GetTable(s.Table)
 	if !ok {
-		return nil, fmt.Errorf("table %q does not exist", s.Table)
+		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table})
 	}
 
 	// Evaluate SET values.
@@ -161,7 +161,7 @@ func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 	for _, sc := range s.Sets {
 		v, err := evalLiteral(sc.Value)
 		if err != nil {
-			return nil, fmt.Errorf("SET %s: %w", sc.Column, err)
+			return nil, WrapError(fmt.Errorf("SET %s: %w", sc.Column, err))
 		}
 		sets[sc.Column] = v
 	}
@@ -172,13 +172,13 @@ func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 	if s.Where != nil {
 		filter, err = buildFilter(s.Where, def)
 		if err != nil {
-			return nil, err
+			return nil, WrapError(err)
 		}
 	}
 
 	n, err := e.engine.Update(s.Table, sets, filter)
 	if err != nil {
-		return nil, err
+		return nil, WrapError(err)
 	}
 	return &Result{Tag: fmt.Sprintf("UPDATE %d", n)}, nil
 }
@@ -186,7 +186,7 @@ func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 func (e *Executor) execDelete(s *parser.DeleteStmt) (*Result, error) {
 	def, ok := e.engine.GetTable(s.Table)
 	if !ok {
-		return nil, fmt.Errorf("table %q does not exist", s.Table)
+		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table})
 	}
 
 	var filter func(storage.Row) bool
@@ -194,13 +194,13 @@ func (e *Executor) execDelete(s *parser.DeleteStmt) (*Result, error) {
 	if s.Where != nil {
 		filter, err = buildFilter(s.Where, def)
 		if err != nil {
-			return nil, err
+			return nil, WrapError(err)
 		}
 	}
 
 	n, err := e.engine.Delete(s.Table, filter)
 	if err != nil {
-		return nil, err
+		return nil, WrapError(err)
 	}
 	return &Result{Tag: fmt.Sprintf("DELETE %d", n)}, nil
 }

@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -318,6 +321,137 @@ func TestValueEncoding(t *testing.T) {
 		if got != want {
 			t.Errorf("value[%d] = %v (%T), want %v (%T)", i, got, got, want, want)
 		}
+	}
+}
+
+// -------------------------------------------------------------------------
+// Typed errors
+// -------------------------------------------------------------------------
+
+func TestEngine_TypedErrors(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	// TableNotFoundError from Scan.
+	_, err := eng.Scan("nope")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var tnf *TableNotFoundError
+	if !errors.As(err, &tnf) {
+		t.Errorf("Scan: expected TableNotFoundError, got %T: %v", err, err)
+	}
+
+	// TableExistsError from duplicate CreateTable.
+	eng.CreateTable("t", testColumns)
+	err = eng.CreateTable("t", testColumns)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var te *TableExistsError
+	if !errors.As(err, &te) {
+		t.Errorf("CreateTable: expected TableExistsError, got %T: %v", err, err)
+	}
+
+	// ValueCountError from wrong column count.
+	_, err = eng.Insert("t", nil, [][]any{{int64(1)}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var vc *ValueCountError
+	if !errors.As(err, &vc) {
+		t.Errorf("Insert: expected ValueCountError, got %T: %v", err, err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// Concurrency
+// -------------------------------------------------------------------------
+
+func TestEngine_ConcurrentReadsAndWrites(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+		{Name: "val", DataType: TypeText},
+	})
+
+	const numWriters = 4
+	const numReaders = 8
+	const opsPerWorker = 50
+
+	// Insert some seed data so readers always have something to scan.
+	eng.Insert("t", nil, [][]any{
+		{int64(0), "seed"},
+	})
+
+	errs := make(chan error, numWriters+numReaders)
+	var wg sync.WaitGroup
+
+	// Writers: insert rows concurrently.
+	for w := 0; w < numWriters; w++ {
+		wg.Add(1)
+		go func(writerID int) {
+			defer wg.Done()
+			for i := 0; i < opsPerWorker; i++ {
+				_, err := eng.Insert("t", nil, [][]any{
+					{int64(writerID*1000 + i), fmt.Sprintf("w%d-%d", writerID, i)},
+				})
+				if err != nil {
+					errs <- fmt.Errorf("writer %d, op %d: %w", writerID, i, err)
+					return
+				}
+			}
+		}(w)
+	}
+
+	// Readers: scan the table concurrently.
+	for r := 0; r < numReaders; r++ {
+		wg.Add(1)
+		go func(readerID int) {
+			defer wg.Done()
+			for i := 0; i < opsPerWorker; i++ {
+				it, err := eng.Scan("t")
+				if err != nil {
+					errs <- fmt.Errorf("reader %d, op %d: scan: %w", readerID, i, err)
+					return
+				}
+				count := 0
+				for {
+					_, ok := it.Next()
+					if !ok {
+						break
+					}
+					count++
+				}
+				it.Close()
+				if count == 0 {
+					errs <- fmt.Errorf("reader %d, op %d: got 0 rows", readerID, i)
+					return
+				}
+			}
+		}(r)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+
+	// Verify final row count: 1 seed + numWriters * opsPerWorker
+	expectedRows := 1 + numWriters*opsPerWorker
+	it, err := eng.Scan("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := collectRows(t, it)
+	if len(rows) != expectedRows {
+		t.Errorf("final rows = %d, want %d", len(rows), expectedRows)
 	}
 }
 

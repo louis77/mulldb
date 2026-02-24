@@ -4,12 +4,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // engine is the concrete storage engine implementation. It writes every
 // mutation to the WAL before applying it to the in-memory heap. On startup
 // the WAL is replayed to reconstruct the full in-memory state.
+//
+// Concurrency: a sync.RWMutex provides single-writer / multi-reader
+// access. Write operations take the write lock; read operations take the
+// read lock. Scan returns a snapshot iterator that is safe to use after
+// the lock is released.
 type engine struct {
+	mu      sync.RWMutex
 	catalog *catalog
 	heaps   map[string]*tableHeap
 	wal     *WAL
@@ -45,6 +52,8 @@ func Open(dataDir string) (Engine, error) {
 
 // Close closes the WAL file.
 func (e *engine) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.wal.Close()
 }
 
@@ -71,7 +80,7 @@ func (e *engine) OnDropTable(name string) error {
 func (e *engine) OnInsert(table string, rowID int64, values []any) error {
 	heap, ok := e.heaps[table]
 	if !ok {
-		return fmt.Errorf("table %q not found", table)
+		return &TableNotFoundError{Name: table}
 	}
 	heap.insertWithID(rowID, values)
 	return nil
@@ -80,7 +89,7 @@ func (e *engine) OnInsert(table string, rowID int64, values []any) error {
 func (e *engine) OnDelete(table string, rowIDs []int64) error {
 	heap, ok := e.heaps[table]
 	if !ok {
-		return fmt.Errorf("table %q not found", table)
+		return &TableNotFoundError{Name: table}
 	}
 	heap.deleteRows(rowIDs)
 	return nil
@@ -89,7 +98,7 @@ func (e *engine) OnDelete(table string, rowIDs []int64) error {
 func (e *engine) OnUpdate(table string, updates []rowUpdate) error {
 	heap, ok := e.heaps[table]
 	if !ok {
-		return fmt.Errorf("table %q not found", table)
+		return &TableNotFoundError{Name: table}
 	}
 	for _, u := range updates {
 		heap.updateRow(u.RowID, u.Values)
@@ -102,8 +111,11 @@ func (e *engine) OnUpdate(table string, updates []rowUpdate) error {
 // -------------------------------------------------------------------------
 
 func (e *engine) CreateTable(name string, columns []ColumnDef) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if _, exists := e.catalog.getTable(name); exists {
-		return fmt.Errorf("table %q already exists", name)
+		return &TableExistsError{Name: name}
 	}
 	if err := e.wal.WriteCreateTable(name, columns); err != nil {
 		return fmt.Errorf("WAL: %w", err)
@@ -112,8 +124,11 @@ func (e *engine) CreateTable(name string, columns []ColumnDef) error {
 }
 
 func (e *engine) DropTable(name string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if _, ok := e.catalog.getTable(name); !ok {
-		return fmt.Errorf("table %q does not exist", name)
+		return &TableNotFoundError{Name: name}
 	}
 	if err := e.wal.WriteDropTable(name); err != nil {
 		return fmt.Errorf("WAL: %w", err)
@@ -122,13 +137,19 @@ func (e *engine) DropTable(name string) error {
 }
 
 func (e *engine) GetTable(name string) (*TableDef, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
 	return e.catalog.getTable(name)
 }
 
 func (e *engine) Insert(table string, columns []string, values [][]any) (int64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	heap, ok := e.heaps[table]
 	if !ok {
-		return 0, fmt.Errorf("table %q does not exist", table)
+		return 0, &TableNotFoundError{Name: table}
 	}
 
 	var count int64
@@ -149,17 +170,23 @@ func (e *engine) Insert(table string, columns []string, values [][]any) (int64, 
 }
 
 func (e *engine) Scan(table string) (RowIterator, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
 	heap, ok := e.heaps[table]
 	if !ok {
-		return nil, fmt.Errorf("table %q does not exist", table)
+		return nil, &TableNotFoundError{Name: table}
 	}
 	return heap.scan(), nil
 }
 
 func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool) (int64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	heap, ok := e.heaps[table]
 	if !ok {
-		return 0, fmt.Errorf("table %q does not exist", table)
+		return 0, &TableNotFoundError{Name: table}
 	}
 
 	var updates []rowUpdate
@@ -173,7 +200,7 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 		for colName, newVal := range sets {
 			idx := heap.columnIndex(colName)
 			if idx < 0 {
-				return 0, fmt.Errorf("column %q not found in table %q", colName, heap.def.Name)
+				return 0, &ColumnNotFoundError{Column: colName, Table: heap.def.Name}
 			}
 			newValues[idx] = newVal
 		}
@@ -194,9 +221,12 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 }
 
 func (e *engine) Delete(table string, filter func(Row) bool) (int64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	heap, ok := e.heaps[table]
 	if !ok {
-		return 0, fmt.Errorf("table %q does not exist", table)
+		return 0, &TableNotFoundError{Name: table}
 	}
 
 	var ids []int64
@@ -231,7 +261,7 @@ func (e *engine) resolveInsertRow(heap *tableHeap, columns []string, values []an
 
 	if columns == nil {
 		if len(values) != len(def.Columns) {
-			return nil, fmt.Errorf("expected %d values, got %d", len(def.Columns), len(values))
+			return nil, &ValueCountError{Expected: len(def.Columns), Got: len(values)}
 		}
 		return values, nil
 	}
@@ -240,10 +270,10 @@ func (e *engine) resolveInsertRow(heap *tableHeap, columns []string, values []an
 	for i, colName := range columns {
 		idx := heap.columnIndex(colName)
 		if idx < 0 {
-			return nil, fmt.Errorf("column %q not found in table %q", colName, def.Name)
+			return nil, &ColumnNotFoundError{Column: colName, Table: def.Name}
 		}
 		if i >= len(values) {
-			return nil, fmt.Errorf("not enough values for columns")
+			return nil, &ValueCountError{Expected: len(columns), Got: len(values)}
 		}
 		row[idx] = values[i]
 	}

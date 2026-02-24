@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -206,5 +207,40 @@ func TestExecutor_Errors(t *testing.T) {
 		if _, err := e.Execute(sql); err == nil {
 			t.Errorf("expected error for %q", sql)
 		}
+	}
+}
+
+func TestExecutor_SQLSTATECodes(t *testing.T) {
+	e := setup(t)
+
+	// Parse error → 42601 (syntax_error).
+	_, err := e.Execute("FROBNICATE")
+	assertSQLSTATE(t, err, "42601")
+
+	// Undefined table → 42P01.
+	_, err = e.Execute("SELECT * FROM nonexistent")
+	assertSQLSTATE(t, err, "42P01")
+
+	// Duplicate table → 42P07.
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	_, err = e.Execute("CREATE TABLE t (id INTEGER)")
+	assertSQLSTATE(t, err, "42P07")
+
+	// Drop nonexistent → 42P01.
+	_, err = e.Execute("DROP TABLE nonexistent")
+	assertSQLSTATE(t, err, "42P01")
+}
+
+func assertSQLSTATE(t *testing.T, err error, expected string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error with SQLSTATE %s, got nil", expected)
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) {
+		t.Fatalf("expected QueryError, got %T: %v", err, err)
+	}
+	if qe.Code != expected {
+		t.Errorf("SQLSTATE = %q, want %q (message: %s)", qe.Code, expected, qe.Message)
 	}
 }

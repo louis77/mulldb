@@ -1,7 +1,5 @@
 package storage
 
-import "fmt"
-
 // catalog manages table schemas in memory. It is rebuilt from the WAL
 // on startup — there is no separate catalog file.
 type catalog struct {
@@ -14,7 +12,7 @@ func newCatalog() *catalog {
 
 func (c *catalog) createTable(name string, columns []ColumnDef) error {
 	if _, exists := c.tables[name]; exists {
-		return fmt.Errorf("table %q already exists", name)
+		return &TableExistsError{Name: name}
 	}
 	c.tables[name] = &TableDef{Name: name, Columns: columns}
 	return nil
@@ -22,7 +20,7 @@ func (c *catalog) createTable(name string, columns []ColumnDef) error {
 
 func (c *catalog) dropTable(name string) error {
 	if _, exists := c.tables[name]; !exists {
-		return fmt.Errorf("table %q does not exist", name)
+		return &TableNotFoundError{Name: name}
 	}
 	delete(c.tables, name)
 	return nil
