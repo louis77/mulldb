@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // parser is the internal recursive-descent parser. Use the exported Parse
@@ -422,7 +423,26 @@ func (p *parser) parsePrimary() (Expr, error) {
 	case TokenIdent:
 		name := p.cur.Literal
 		p.next()
-		return &ColumnRef{Name: name}, nil
+		if p.cur.Type != TokenLParen {
+			return &ColumnRef{Name: name}, nil
+		}
+		// function call: NAME(...)
+		p.next() // consume (
+		var args []Expr
+		if p.cur.Type == TokenStar {
+			args = []Expr{&StarExpr{}}
+			p.next()
+		} else if p.cur.Type != TokenRParen {
+			arg, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			args = []Expr{arg}
+		}
+		if _, err := p.expect(TokenRParen); err != nil {
+			return nil, err
+		}
+		return &FunctionCallExpr{Name: strings.ToUpper(name), Args: args}, nil
 	case TokenLParen:
 		p.next()
 		expr, err := p.parseExpr()

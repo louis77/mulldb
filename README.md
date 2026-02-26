@@ -9,6 +9,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — write-ahead log (WAL) with CRC32 checksums and fsync for crash recovery
 - **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE), UPDATE, DELETE
+- **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), logical (`AND`, `OR`), parenthesized expressions
 - **Concurrent access** — single-writer / multi-reader via RWMutex, safe for multiple connections
@@ -101,6 +102,14 @@ INSERT INTO <table> VALUES (<values>);  -- all columns, in order
 SELECT * FROM <table>;
 SELECT <columns> FROM <table> WHERE <condition>;
 
+-- Aggregate queries (returns a single row)
+SELECT COUNT(*) FROM <table>;
+SELECT COUNT(<column>) FROM <table>;
+SELECT SUM(<column>) FROM <table>;
+SELECT MIN(<column>) FROM <table>;
+SELECT MAX(<column>) FROM <table>;
+SELECT COUNT(*), SUM(<column>), MIN(<column>), MAX(<column>) FROM <table>;
+
 -- Update rows
 UPDATE <table> SET <column> = <value>, ... WHERE <condition>;
 UPDATE <table> SET <column> = <value>;  -- all rows
@@ -118,6 +127,47 @@ DELETE FROM <table>;  -- all rows
 | `TEXT` | `string` | Variable-length string |
 | `BOOLEAN` | `bool` | `TRUE` or `FALSE` |
 | `NULL` | `nil` | Absence of a value (any column) |
+
+### Aggregate Functions
+
+Aggregate functions collapse all matching rows into a single result row. Multiple aggregates can appear in the same `SELECT`. Mixing aggregate and non-aggregate columns in the same `SELECT` is an error (SQLSTATE `42803`) — `GROUP BY` is not supported.
+
+| Function | Argument | Returns | Description |
+|----------|----------|---------|-------------|
+| `COUNT(*)` | — | `INTEGER` | Count of all rows |
+| `COUNT(col)` | any column | `INTEGER` | Count of non-NULL values in `col` |
+| `SUM(col)` | `INTEGER` column | `INTEGER` | Sum of all non-NULL values |
+| `MIN(col)` | `INTEGER` or `TEXT` column | same as `col` | Smallest non-NULL value |
+| `MAX(col)` | `INTEGER` or `TEXT` column | same as `col` | Largest non-NULL value |
+
+Function names are case-insensitive (`sum`, `Sum`, `SUM` all work).
+
+**Examples:**
+
+```sql
+CREATE TABLE orders (amount INTEGER, status TEXT);
+INSERT INTO orders VALUES (10, 'paid'), (25, 'paid'), (5, 'pending'), (40, 'paid');
+
+SELECT COUNT(*) FROM orders;
+--  count
+-- -------
+--      4
+
+SELECT SUM(amount) FROM orders;
+--  sum
+-- -----
+--   80
+
+SELECT MIN(amount), MAX(amount) FROM orders;
+--  min | max
+-- -----+-----
+--    5 |  40
+
+SELECT COUNT(*), SUM(amount), MIN(amount), MAX(amount) FROM orders;
+--  count | sum | min | max
+-- -------+-----+-----+-----
+--      4 |  80 |   5 |  40
+```
 
 ### WHERE Expressions
 
@@ -212,12 +262,12 @@ mulldb/
 │   ├── lexer.go            Tokenizer (SQL → tokens)
 │   ├── ast.go              AST node types
 │   ├── parser.go           Recursive descent parser (tokens → AST)
-│   └── parser_test.go      21 parser tests
+│   └── parser_test.go      26 parser tests
 │
 ├── executor/
 │   ├── executor.go         Query execution (AST → storage → results)
 │   ├── result.go           Result types, QueryError, SQLSTATE mapping
-│   └── executor_test.go    12 executor tests
+│   └── executor_test.go    18 executor tests
 │
 └── storage/
     ├── types.go            Data types, typed errors, Engine interface
@@ -244,9 +294,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, error cases
+- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate function syntax, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 
@@ -259,6 +309,8 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 | `42P07` | Duplicate table | `CREATE TABLE t (...)` when `t` exists |
 | `42703` | Undefined column | `SELECT bad_col FROM t` |
 | `22023` | Invalid parameter value | Wrong number of INSERT values |
+| `42803` | Grouping error | Mixing aggregate and non-aggregate columns |
+| `42883` | Undefined function | Unknown aggregate function or type mismatch |
 
 ## Limitations
 
@@ -268,7 +320,8 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **Transactions** — no BEGIN/COMMIT/ROLLBACK
 - **JOINs** — single-table queries only
 - **ORDER BY / GROUP BY / HAVING / LIMIT**
-- **Aggregates** — no COUNT, SUM, AVG, etc.
+- **AVG** — not implemented (use `SUM` / `COUNT` manually)
+- **GROUP BY / HAVING** — aggregates apply to the whole table only
 - **ALTER TABLE**
 - **Subqueries or expressions in SELECT**
 - **Extended query protocol** — only SimpleQuery flow

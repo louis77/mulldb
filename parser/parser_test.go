@@ -435,6 +435,103 @@ func TestParse_ParenthesizedExpr(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Aggregate functions
+// ---------------------------------------------------------------------------
+
+func TestParse_Aggregate_CountStar(t *testing.T) {
+	stmt, err := Parse("SELECT COUNT(*) FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(sel.Columns))
+	}
+	fn, ok := sel.Columns[0].(*FunctionCallExpr)
+	if !ok {
+		t.Fatalf("got %T, want *FunctionCallExpr", sel.Columns[0])
+	}
+	if fn.Name != "COUNT" {
+		t.Errorf("name = %q, want COUNT", fn.Name)
+	}
+	if len(fn.Args) != 1 {
+		t.Fatalf("args = %d, want 1", len(fn.Args))
+	}
+	if _, ok := fn.Args[0].(*StarExpr); !ok {
+		t.Errorf("arg[0] is %T, want *StarExpr", fn.Args[0])
+	}
+}
+
+func TestParse_Aggregate_Sum(t *testing.T) {
+	stmt, err := Parse("SELECT SUM(val) FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	fn, ok := sel.Columns[0].(*FunctionCallExpr)
+	if !ok {
+		t.Fatalf("got %T, want *FunctionCallExpr", sel.Columns[0])
+	}
+	if fn.Name != "SUM" {
+		t.Errorf("name = %q, want SUM", fn.Name)
+	}
+	if len(fn.Args) != 1 {
+		t.Fatalf("args = %d, want 1", len(fn.Args))
+	}
+	assertColumnRef(t, fn.Args[0], "val")
+}
+
+func TestParse_Aggregate_MinMax(t *testing.T) {
+	for _, sql := range []string{"SELECT MIN(score) FROM t", "SELECT MAX(score) FROM t"} {
+		stmt, err := Parse(sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		sel := stmt.(*SelectStmt)
+		fn, ok := sel.Columns[0].(*FunctionCallExpr)
+		if !ok {
+			t.Fatalf("%s: got %T, want *FunctionCallExpr", sql, sel.Columns[0])
+		}
+		if fn.Name != "MIN" && fn.Name != "MAX" {
+			t.Errorf("%s: name = %q, want MIN or MAX", sql, fn.Name)
+		}
+		assertColumnRef(t, fn.Args[0], "score")
+	}
+}
+
+func TestParse_Aggregate_MultipleAggregates(t *testing.T) {
+	stmt, err := Parse("SELECT COUNT(*), SUM(val) FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(sel.Columns))
+	}
+	if _, ok := sel.Columns[0].(*FunctionCallExpr); !ok {
+		t.Errorf("col[0] is %T, want *FunctionCallExpr", sel.Columns[0])
+	}
+	if _, ok := sel.Columns[1].(*FunctionCallExpr); !ok {
+		t.Errorf("col[1] is %T, want *FunctionCallExpr", sel.Columns[1])
+	}
+}
+
+func TestParse_Aggregate_CaseInsensitive(t *testing.T) {
+	stmt, err := Parse("SELECT sum(val), count(*) FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	names := []string{"SUM", "COUNT"}
+	for i, want := range names {
+		fn := sel.Columns[i].(*FunctionCallExpr)
+		if fn.Name != want {
+			t.Errorf("col[%d].Name = %q, want %q", i, fn.Name, want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -464,4 +465,32 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+
+// -------------------------------------------------------------------------
+// Benchmarks
+// -------------------------------------------------------------------------
+
+func BenchmarkSumScan(b *testing.B) {
+	const rowCount = 10_000_000
+	def := TableDef{Name: "bench", Columns: []ColumnDef{{Name: "val", DataType: TypeInteger}}}
+	h := newTableHeap(def)
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < rowCount; i++ {
+		h.insertWithID(int64(i+1), []any{int64(rng.Intn(6))})
+	}
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		it := h.scan()
+		var sum int64
+		for {
+			row, ok := it.Next()
+			if !ok {
+				break
+			}
+			sum += row.Values[0].(int64)
+		}
+		it.Close()
+		_ = sum
+	}
 }

@@ -231,6 +231,128 @@ func TestExecutor_SQLSTATECodes(t *testing.T) {
 	assertSQLSTATE(t, err, "42P01")
 }
 
+// -------------------------------------------------------------------------
+// Aggregate functions
+// -------------------------------------------------------------------------
+
+func TestExecutor_Aggregate_CountStar(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (3), (2), (4), (0)")
+
+	r := exec(t, e, "SELECT COUNT(*) FROM t")
+	if len(r.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(r.Columns))
+	}
+	if r.Columns[0].Name != "count" {
+		t.Errorf("col name = %q, want count", r.Columns[0].Name)
+	}
+	if r.Columns[0].TypeOID != OIDInt8 {
+		t.Errorf("col OID = %d, want %d", r.Columns[0].TypeOID, OIDInt8)
+	}
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "5" {
+		t.Errorf("count = %q, want 5", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_Sum(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (3), (2), (4), (0)")
+
+	r := exec(t, e, "SELECT SUM(val) FROM t")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "10" {
+		t.Errorf("sum = %q, want 10", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_Min(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (5), (2), (8), (1), (4)")
+
+	r := exec(t, e, "SELECT MIN(val) FROM t")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("min = %q, want 1", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_Max(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (5), (2), (8), (1), (4)")
+
+	r := exec(t, e, "SELECT MAX(val) FROM t")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "8" {
+		t.Errorf("max = %q, want 8", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_MultipleAggregates(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (3), (2), (4), (0)")
+
+	r := exec(t, e, "SELECT COUNT(*), SUM(val) FROM t")
+	if len(r.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(r.Columns))
+	}
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "5" {
+		t.Errorf("count = %q, want 5", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "10" {
+		t.Errorf("sum = %q, want 10", r.Rows[0][1])
+	}
+}
+
+func TestExecutor_Aggregate_EmptyTable(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+
+	r := exec(t, e, "SELECT COUNT(*) FROM t")
+	if string(r.Rows[0][0]) != "0" {
+		t.Errorf("count of empty table = %q, want 0", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT SUM(val) FROM t")
+	if string(r.Rows[0][0]) != "0" {
+		t.Errorf("sum of empty table = %q, want 0", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_MixedError(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1, 10)")
+
+	_, err := e.Execute("SELECT id, SUM(val) FROM t")
+	if err == nil {
+		t.Fatal("expected error for mixed aggregate + non-aggregate")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) {
+		t.Fatalf("expected QueryError, got %T", err)
+	}
+	if qe.Code != "42803" {
+		t.Errorf("SQLSTATE = %q, want 42803", qe.Code)
+	}
+}
+
 func assertSQLSTATE(t *testing.T, err error, expected string) {
 	t.Helper()
 	if err == nil {

@@ -105,6 +105,25 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		return nil, WrapError(&storage.TableNotFoundError{Name: s.From})
 	}
 
+	// Detect aggregate vs non-aggregate columns.
+	hasAgg, hasNonAgg := false, false
+	for _, col := range s.Columns {
+		if _, ok := col.(*parser.FunctionCallExpr); ok {
+			hasAgg = true
+		} else {
+			hasNonAgg = true
+		}
+	}
+	if hasAgg && hasNonAgg {
+		return nil, &QueryError{
+			Code:    "42803",
+			Message: "aggregate and non-aggregate columns cannot be mixed without GROUP BY",
+		}
+	}
+	if hasAgg {
+		return e.execSelectAggregate(s, def)
+	}
+
 	// Resolve which columns to return.
 	colIndices, resultCols, err := resolveSelectColumns(s.Columns, def)
 	if err != nil {
@@ -147,6 +166,131 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		Columns: resultCols,
 		Rows:    resultRows,
 		Tag:     fmt.Sprintf("SELECT %d", len(resultRows)),
+	}, nil
+}
+
+func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableDef) (*Result, error) {
+	type aggAcc struct {
+		funcName  string
+		colIdx    int // -1 for COUNT(*)
+		inputType storage.DataType
+		count     int64
+		sumI      int64
+		minV      any
+		maxV      any
+		hasV      bool
+	}
+
+	accs := make([]*aggAcc, len(s.Columns))
+	resultCols := make([]Column, len(s.Columns))
+
+	for i, expr := range s.Columns {
+		fn := expr.(*parser.FunctionCallExpr)
+		acc := &aggAcc{funcName: fn.Name, colIdx: -1}
+
+		if len(fn.Args) == 1 {
+			switch arg := fn.Args[0].(type) {
+			case *parser.StarExpr:
+				acc.colIdx = -1
+			case *parser.ColumnRef:
+				idx := columnIndex(def, arg.Name)
+				if idx < 0 {
+					return nil, WrapError(fmt.Errorf("column %q not found in table %q", arg.Name, def.Name))
+				}
+				acc.colIdx = idx
+				acc.inputType = def.Columns[idx].DataType
+			}
+		}
+
+		switch fn.Name {
+		case "SUM":
+			if acc.colIdx < 0 {
+				return nil, &QueryError{Code: "42883", Message: "SUM requires a column argument"}
+			}
+			if acc.inputType != storage.TypeInteger {
+				return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("SUM: column must be INTEGER, got %s", acc.inputType)}
+			}
+		case "MIN", "MAX":
+			if acc.colIdx < 0 {
+				return nil, &QueryError{Code: "42883", Message: fn.Name + " requires a column argument"}
+			}
+		case "COUNT":
+			// COUNT(*) or COUNT(col) — both valid
+		default:
+			return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("unknown aggregate function %q", fn.Name)}
+		}
+
+		accs[i] = acc
+		resultCols[i] = Column{
+			Name:     strings.ToLower(fn.Name),
+			TypeOID:  aggregateTypeOID(fn.Name, acc.inputType),
+			TypeSize: aggregateTypeSize(fn.Name, acc.inputType),
+		}
+	}
+
+	// Scan all rows and accumulate.
+	it, err := e.engine.Scan(s.From)
+	if err != nil {
+		return nil, WrapError(err)
+	}
+	defer it.Close()
+
+	for {
+		row, ok := it.Next()
+		if !ok {
+			break
+		}
+		for _, acc := range accs {
+			switch acc.funcName {
+			case "COUNT":
+				if acc.colIdx < 0 || row.Values[acc.colIdx] != nil {
+					acc.count++
+				}
+			case "SUM":
+				if v, ok := row.Values[acc.colIdx].(int64); ok {
+					acc.sumI += v
+				}
+			case "MIN":
+				v := row.Values[acc.colIdx]
+				if v == nil {
+					continue
+				}
+				if !acc.hasV || compareValues(v, acc.minV) < 0 {
+					acc.minV = v
+					acc.hasV = true
+				}
+			case "MAX":
+				v := row.Values[acc.colIdx]
+				if v == nil {
+					continue
+				}
+				if !acc.hasV || compareValues(v, acc.maxV) > 0 {
+					acc.maxV = v
+					acc.hasV = true
+				}
+			}
+		}
+	}
+
+	// Build the single result row.
+	resultRow := make([][]byte, len(accs))
+	for i, acc := range accs {
+		switch acc.funcName {
+		case "COUNT":
+			resultRow[i] = formatValue(acc.count)
+		case "SUM":
+			resultRow[i] = formatValue(acc.sumI)
+		case "MIN":
+			resultRow[i] = formatValue(acc.minV)
+		case "MAX":
+			resultRow[i] = formatValue(acc.maxV)
+		}
+	}
+
+	return &Result{
+		Columns: resultCols,
+		Rows:    [][][]byte{resultRow},
+		Tag:     "SELECT 1",
 	}, nil
 }
 
@@ -437,6 +581,28 @@ func columnIndex(def *storage.TableDef, name string) int {
 		}
 	}
 	return -1
+}
+
+func aggregateTypeOID(funcName string, inputType storage.DataType) int32 {
+	switch funcName {
+	case "COUNT", "SUM":
+		return OIDInt8
+	case "MIN", "MAX":
+		return typeOID(inputType)
+	default:
+		return OIDUnknown
+	}
+}
+
+func aggregateTypeSize(funcName string, inputType storage.DataType) int16 {
+	switch funcName {
+	case "COUNT", "SUM":
+		return 8
+	case "MIN", "MAX":
+		return typeSize(inputType)
+	default:
+		return -1
+	}
 }
 
 func typeOID(dt storage.DataType) int32 {

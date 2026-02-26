@@ -114,10 +114,17 @@ type BinaryExpr struct {
 	Right Expr
 }
 
-func (*ColumnRef) exprNode()   {}
-func (*StarExpr) exprNode()    {}
-func (*IntegerLit) exprNode()  {}
-func (*StringLit) exprNode()   {}
-func (*BoolLit) exprNode()     {}
-func (*NullLit) exprNode()     {}
-func (*BinaryExpr) exprNode()  {}
+// FunctionCallExpr represents a function call such as SUM(col) or COUNT(*).
+type FunctionCallExpr struct {
+	Name string // uppercased: "SUM", "COUNT", "MIN", "MAX"
+	Args []Expr // COUNT(*) → []*StarExpr; column aggs → []*ColumnRef
+}
+
+func (*ColumnRef) exprNode()         {}
+func (*StarExpr) exprNode()          {}
+func (*IntegerLit) exprNode()        {}
+func (*StringLit) exprNode()         {}
+func (*BoolLit) exprNode()           {}
+func (*NullLit) exprNode()           {}
+func (*BinaryExpr) exprNode()        {}
+func (*FunctionCallExpr) exprNode()  {}
