@@ -100,6 +100,10 @@ func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 }
 
 func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
+	if s.From == "" {
+		return execSelectStatic(s.Columns)
+	}
+
 	def, ok := e.engine.GetTable(s.From)
 	if !ok {
 		return nil, WrapError(&storage.TableNotFoundError{Name: s.From})
@@ -293,6 +297,28 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		Tag:     "SELECT 1",
 	}, nil
 }
+
+// execSelectStatic handles SELECT with no FROM clause (e.g. SELECT 1, VERSION()).
+func execSelectStatic(exprs []parser.Expr) (*Result, error) {
+	var cols []Column
+	var row [][]byte
+
+	for _, expr := range exprs {
+		val, col, err := evalStaticExpr(expr)
+		if err != nil {
+			return nil, err
+		}
+		cols = append(cols, col)
+		row = append(row, formatValue(val))
+	}
+
+	return &Result{
+		Columns: cols,
+		Rows:    [][][]byte{row},
+		Tag:     "SELECT 1",
+	}, nil
+}
+
 
 func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 	def, ok := e.engine.GetTable(s.Table)

@@ -232,6 +232,87 @@ func TestExecutor_SQLSTATECodes(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// Static SELECT (no FROM)
+// -------------------------------------------------------------------------
+
+func TestExecutor_StaticSelect_IntLit(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 1")
+	if len(r.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(r.Columns))
+	}
+	if r.Columns[0].Name != "?column?" {
+		t.Errorf("col name = %q, want ?column?", r.Columns[0].Name)
+	}
+	if r.Columns[0].TypeOID != OIDInt8 {
+		t.Errorf("col OID = %d, want %d (OIDInt8)", r.Columns[0].TypeOID, OIDInt8)
+	}
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("value = %q, want 1", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_StaticSelect_MultipleTypes(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 42, 'hello', TRUE, NULL")
+	if len(r.Columns) != 4 {
+		t.Fatalf("columns = %d, want 4", len(r.Columns))
+	}
+	if string(r.Rows[0][0]) != "42" {
+		t.Errorf("int = %q, want 42", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "hello" {
+		t.Errorf("str = %q, want hello", r.Rows[0][1])
+	}
+	if string(r.Rows[0][2]) != "t" {
+		t.Errorf("bool = %q, want t", r.Rows[0][2])
+	}
+	if r.Rows[0][3] != nil {
+		t.Errorf("null = %v, want nil", r.Rows[0][3])
+	}
+}
+
+func TestExecutor_StaticSelect_Version(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT VERSION()")
+	if len(r.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(r.Columns))
+	}
+	if r.Columns[0].Name != "version" {
+		t.Errorf("col name = %q, want version", r.Columns[0].Name)
+	}
+	if r.Columns[0].TypeOID != OIDText {
+		t.Errorf("col OID = %d, want %d (OIDText)", r.Columns[0].TypeOID, OIDText)
+	}
+	if len(r.Rows) != 1 || len(r.Rows[0][0]) == 0 {
+		t.Fatal("expected non-empty version string")
+	}
+	v := string(r.Rows[0][0])
+	if !startsWith(v, "PostgreSQL") {
+		t.Errorf("version = %q, want prefix PostgreSQL", v)
+	}
+}
+
+func TestExecutor_StaticSelect_UnknownFunction(t *testing.T) {
+	e := setup(t)
+	_, err := e.Execute("SELECT FROBNICATE()")
+	assertSQLSTATE(t, err, "42883")
+}
+
+func TestExecutor_StaticSelect_VersionWithArgs(t *testing.T) {
+	e := setup(t)
+	_, err := e.Execute("SELECT VERSION(1)")
+	assertSQLSTATE(t, err, "42883")
+}
+
+func startsWith(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+// -------------------------------------------------------------------------
 // Aggregate functions
 // -------------------------------------------------------------------------
 

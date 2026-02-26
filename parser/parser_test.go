@@ -435,6 +435,69 @@ func TestParse_ParenthesizedExpr(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// SELECT without FROM
+// ---------------------------------------------------------------------------
+
+func TestParse_SelectNoFrom_IntLit(t *testing.T) {
+	stmt, err := Parse("SELECT 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, ok := stmt.(*SelectStmt)
+	if !ok {
+		t.Fatalf("got %T, want *SelectStmt", stmt)
+	}
+	if sel.From != "" {
+		t.Errorf("from = %q, want empty string", sel.From)
+	}
+	if len(sel.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(sel.Columns))
+	}
+	assertIntLit(t, sel.Columns[0], 1)
+}
+
+func TestParse_SelectNoFrom_MultipleExprs(t *testing.T) {
+	stmt, err := Parse("SELECT 1, 'hello', TRUE, NULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From != "" {
+		t.Errorf("from = %q, want empty string", sel.From)
+	}
+	if len(sel.Columns) != 4 {
+		t.Fatalf("columns = %d, want 4", len(sel.Columns))
+	}
+	assertIntLit(t, sel.Columns[0], 1)
+	assertStrLit(t, sel.Columns[1], "hello")
+	assertBoolLit(t, sel.Columns[2], true)
+	if _, ok := sel.Columns[3].(*NullLit); !ok {
+		t.Errorf("columns[3] is %T, want *NullLit", sel.Columns[3])
+	}
+}
+
+func TestParse_SelectNoFrom_FunctionCall(t *testing.T) {
+	stmt, err := Parse("SELECT VERSION()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From != "" {
+		t.Errorf("from = %q, want empty string", sel.From)
+	}
+	fn, ok := sel.Columns[0].(*FunctionCallExpr)
+	if !ok {
+		t.Fatalf("got %T, want *FunctionCallExpr", sel.Columns[0])
+	}
+	if fn.Name != "VERSION" {
+		t.Errorf("name = %q, want VERSION", fn.Name)
+	}
+	if len(fn.Args) != 0 {
+		t.Errorf("args = %d, want 0", len(fn.Args))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Aggregate functions
 // ---------------------------------------------------------------------------
 

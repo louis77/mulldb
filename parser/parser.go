@@ -242,12 +242,15 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
-	if _, err := p.expect(TokenFrom); err != nil {
-		return nil, err
-	}
-	table, err := p.expect(TokenIdent)
-	if err != nil {
-		return nil, err
+	var tableName string
+	var err error
+	if p.cur.Type == TokenFrom {
+		p.next() // consume FROM
+		table, tableErr := p.expect(TokenIdent)
+		if tableErr != nil {
+			return nil, tableErr
+		}
+		tableName = table.Literal
 	}
 
 	var where Expr
@@ -259,7 +262,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
-	return &SelectStmt{Columns: columns, From: table.Literal, Where: where}, nil
+	return &SelectStmt{Columns: columns, From: tableName, Where: where}, nil
 }
 
 func (p *parser) parseUpdate() (*UpdateStmt, error) {

@@ -10,6 +10,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Persistent storage** — write-ahead log (WAL) with CRC32 checksums and fsync for crash recovery
 - **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE), UPDATE, DELETE
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
+- **Scalar functions** — `VERSION()` and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), logical (`AND`, `OR`), parenthesized expressions
 - **Concurrent access** — single-writer / multi-reader via RWMutex, safe for multiple connections
@@ -104,6 +105,11 @@ INSERT INTO <table> VALUES (<values>);  -- all columns, in order
 SELECT * FROM <table>;
 SELECT <columns> FROM <table> WHERE <condition>;
 
+-- Static SELECT (no table required)
+SELECT 1;
+SELECT 1, 'hello', TRUE, NULL;
+SELECT VERSION();
+
 -- Aggregate queries (returns a single row)
 SELECT COUNT(*) FROM <table>;
 SELECT COUNT(<column>) FROM <table>;
@@ -170,6 +176,32 @@ SELECT COUNT(*), SUM(amount), MIN(amount), MAX(amount) FROM orders;
 -- -------+-----+-----+-----
 --      4 |  80 |   5 |  40
 ```
+
+### Scalar Functions
+
+Scalar functions can be called in a `SELECT` without a `FROM` clause. They take zero or more arguments and return a single value.
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `VERSION()` | `TEXT` | PostgreSQL-compatible version string identifying the mulldb build |
+
+Function names are case-insensitive.
+
+**Examples:**
+
+```sql
+SELECT VERSION();
+--                           version
+-- ----------------------------------------------------------
+--  PostgreSQL 15.0 (mulldb dev, commit abc1234, built ...)
+
+SELECT 1, 'hello', TRUE, NULL;
+--  ?column? | ?column? | ?column? | ?column?
+-- ----------+----------+----------+----------
+--         1 | hello    | t        |
+```
+
+Calling an unknown function returns SQLSTATE `42883`. Calling a function with the wrong number of arguments also returns `42883`.
 
 ### WHERE Expressions
 
@@ -264,12 +296,17 @@ mulldb/
 │   ├── lexer.go            Tokenizer (SQL → tokens)
 │   ├── ast.go              AST node types
 │   ├── parser.go           Recursive descent parser (tokens → AST)
-│   └── parser_test.go      26 parser tests
+│   └── parser_test.go      29 parser tests
 │
 ├── executor/
 │   ├── executor.go         Query execution (AST → storage → results)
+│   ├── scalar.go           Scalar function registry and static SELECT evaluation
+│   ├── fn_version.go       VERSION() implementation (registers via init())
 │   ├── result.go           Result types, QueryError, SQLSTATE mapping
-│   └── executor_test.go    18 executor tests
+│   └── executor_test.go    23 executor tests
+│
+├── version/
+│   └── version.go          Build-info package; Tag/GitCommit/BuildTime set via -ldflags
 │
 └── storage/
     ├── types.go            Data types, typed errors, Engine interface
@@ -296,9 +333,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate function syntax, error cases
+- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, optional FROM clause, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 
@@ -325,7 +362,8 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
 - **GROUP BY / HAVING** — aggregates apply to the whole table only
 - **ALTER TABLE**
-- **Subqueries or expressions in SELECT**
+- **Expressions in SELECT** — arithmetic like `1 + 2` is not supported; only literals and scalar functions work without `FROM`
+- **Subqueries**
 - **Extended query protocol** — only SimpleQuery flow
 - **TLS/SSL** — connections are unencrypted (SSL negotiation is refused)
 - **Multiple databases** — single database per instance
