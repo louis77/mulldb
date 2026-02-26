@@ -11,6 +11,7 @@ type Config struct {
 	DataDir  string
 	User     string
 	Password string
+	LogLevel int
 }
 
 func Parse() *Config {
@@ -19,6 +20,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.DataDir, "datadir", envStr("MULLDB_DATADIR", "./data"), "data directory")
 	flag.StringVar(&cfg.User, "user", envStr("MULLDB_USER", "admin"), "auth username")
 	flag.StringVar(&cfg.Password, "password", envStr("MULLDB_PASSWORD", ""), "auth password")
+	flag.IntVar(&cfg.LogLevel, "log-level", envInt("MULLDB_LOG_LEVEL", 0), "log verbosity (0=off, 1=SQL statements)")
 	flag.Parse()
 	return cfg
 }

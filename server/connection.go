@@ -158,6 +158,10 @@ func (c *Connection) handleQuery(query string) error {
 		return c.sendReady()
 	}
 
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] %s", query)
+	}
+
 	// Handle SET commands that psql sends during startup — our parser
 	// doesn't cover SET, so we return a stub response.
 	if strings.HasPrefix(strings.ToUpper(query), "SET") {

@@ -72,6 +72,7 @@ All options can be set via CLI flags or environment variables. Environment varia
 | `--datadir` | `MULLDB_DATADIR` | `./data` | Directory for WAL and data files |
 | `--user` | `MULLDB_USER` | `admin` | Username for authentication |
 | `--password` | `MULLDB_PASSWORD` | *(empty)* | Password for authentication |
+| `--log-level` | `MULLDB_LOG_LEVEL` | `0` | Log verbosity: `0` = off, `1` = log every SQL statement |
 
 Example with environment variables:
 
@@ -80,6 +81,7 @@ export MULLDB_PORT=5433
 export MULLDB_DATADIR=/var/lib/mulldb
 export MULLDB_USER=myuser
 export MULLDB_PASSWORD=mypass
+export MULLDB_LOG_LEVEL=1
 ./mulldb
 ```
 
