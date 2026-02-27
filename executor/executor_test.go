@@ -498,6 +498,47 @@ func TestExecutor_StaticSelectAlias(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// Double-quoted identifiers
+// -------------------------------------------------------------------------
+
+func TestExecutor_QuotedIdentifiers(t *testing.T) {
+	e := setup(t)
+
+	// Create table with a reserved-word name and reserved-word columns.
+	exec(t, e, `CREATE TABLE "table" ("select" INTEGER, "from" TEXT)`)
+
+	// Insert using quoted identifiers.
+	exec(t, e, `INSERT INTO "table" ("select", "from") VALUES (1, 'hello'), (2, 'world')`)
+
+	// Select using quoted table and column names.
+	r := exec(t, e, `SELECT "select", "from" FROM "table"`)
+	if len(r.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(r.Columns))
+	}
+	if r.Columns[0].Name != "select" {
+		t.Errorf("col[0] = %q, want select", r.Columns[0].Name)
+	}
+	if r.Columns[1].Name != "from" {
+		t.Errorf("col[1] = %q, want from", r.Columns[1].Name)
+	}
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("row[0][0] = %q, want 1", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "hello" {
+		t.Errorf("row[0][1] = %q, want hello", r.Rows[0][1])
+	}
+
+	// COUNT with quoted table name.
+	r = exec(t, e, `SELECT COUNT(*) FROM "table"`)
+	if string(r.Rows[0][0]) != "2" {
+		t.Errorf("count = %q, want 2", r.Rows[0][0])
+	}
+}
+
 func assertSQLSTATE(t *testing.T, err error, expected string) {
 	t.Helper()
 	if err == nil {

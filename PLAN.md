@@ -12,7 +12,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Wire protocol | PostgreSQL v3 (simple query flow) |
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
-| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`), `UPDATE`, `DELETE` |
+| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`), `UPDATE`, `DELETE`. Double-quoted identifiers for reserved words and case preservation. |
 | Data types | `INTEGER`, `TEXT`, `BOOLEAN` |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
@@ -103,6 +103,7 @@ psql / PG drivers
 │                      │  ReadyForQuery, ErrorResponse
 ├─────────────────────┤
 │   SQL Parser         │  Lexer → tokens → recursive descent → AST
+│                      │  Supports double-quoted identifiers ("col")
 ├─────────────────────┤
 │   Query Executor     │  Walk AST, read/write via storage engine
 │                      │  Single-writer serialization here
@@ -174,7 +175,7 @@ Get `psql` to connect and receive a response.
 ### Phase 2: Parser
 Hand-written SQL parser for the minimal CRUD set.
 - `parser/token.go`: Token types (keywords, identifiers, literals, operators)
-- `parser/lexer.go`: Tokenize SQL strings
+- `parser/lexer.go`: Tokenize SQL strings (including double-quoted identifiers with `""` escape)
 - `parser/ast.go`: AST nodes for `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT`, `UPDATE`, `DELETE`
 - `parser/parser.go`: Recursive descent parser producing AST
 - **Milestone**: Parse `CREATE TABLE foo (id INTEGER, name TEXT, active BOOLEAN)` into an AST

@@ -91,6 +91,8 @@ func (l *Lexer) NextToken() Token {
 		return Token{Type: TokenGt, Literal: ">", Pos: start}
 	case l.ch == '\'':
 		return l.readString(start)
+	case l.ch == '"':
+		return l.readQuotedIdent(start)
 	case isDigit(l.ch):
 		return l.readInteger(start)
 	case isLetter(l.ch) || l.ch == '_':
@@ -136,6 +138,29 @@ func (l *Lexer) readIdentOrKeyword(start int) Token {
 	}
 	literal := l.input[begin:l.pos]
 	return Token{Type: LookupKeyword(literal), Literal: literal, Pos: start}
+}
+
+func (l *Lexer) readQuotedIdent(start int) Token {
+	l.advance() // skip opening double-quote
+	var buf []byte
+	for {
+		if l.ch == 0 {
+			return Token{Type: TokenIllegal, Literal: string(buf), Pos: start}
+		}
+		if l.ch == '"' {
+			if l.peek() == '"' {
+				// "" escape → literal double-quote
+				buf = append(buf, '"')
+				l.advance()
+				l.advance()
+				continue
+			}
+			l.advance() // skip closing double-quote
+			return Token{Type: TokenIdent, Literal: string(buf), Pos: start}
+		}
+		buf = append(buf, l.ch)
+		l.advance()
+	}
 }
 
 func isDigit(ch byte) bool  { return ch >= '0' && ch <= '9' }

@@ -21,6 +21,15 @@ See [PLAN.md](PLAN.md) for the full architecture, implementation phases, and des
 - **Testable in isolation**: Each package can be unit tested with mocks/stubs — no need for a running server or real disk to test the parser, no need for a parser to test storage.
 - See [PLAN.md](PLAN.md) for the full interface contracts and dependency diagram.
 
+## SQL Features
+
+- CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`), `UPDATE`, `DELETE`
+- Data types: `INTEGER`, `TEXT`, `BOOLEAN`
+- Aggregate functions: `COUNT(*)`, `COUNT(col)`, `SUM`, `MIN`, `MAX`
+- Column aliases with `AS`
+- Schema-qualified table names (`schema.table`)
+- Double-quoted identifiers (`"select"`, `"public"."names"`) — allows reserved words as identifiers, preserves exact casing, supports `""` escape for literal double-quote
+
 ## Go Conventions
 
 - Use `any` instead of `interface{}`

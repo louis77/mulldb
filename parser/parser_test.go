@@ -673,6 +673,97 @@ func TestParse_SelectMixedAliasNoAlias(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Double-quoted identifiers
+// ---------------------------------------------------------------------------
+
+func TestLexer_QuotedIdent(t *testing.T) {
+	lex := NewLexer(`"users"`)
+	tok := lex.NextToken()
+	if tok.Type != TokenIdent || tok.Literal != "users" {
+		t.Fatalf("got %s %q, want IDENT users", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexer_QuotedIdentEscape(t *testing.T) {
+	lex := NewLexer(`"say""hello"`)
+	tok := lex.NextToken()
+	if tok.Type != TokenIdent || tok.Literal != `say"hello` {
+		t.Fatalf("got %s %q, want IDENT say\"hello", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexer_QuotedIdentReservedWord(t *testing.T) {
+	lex := NewLexer(`"select"`)
+	tok := lex.NextToken()
+	if tok.Type != TokenIdent {
+		t.Fatalf("got %s, want IDENT (reserved word should be identifier when quoted)", tok.Type)
+	}
+	if tok.Literal != "select" {
+		t.Errorf("literal = %q, want select", tok.Literal)
+	}
+}
+
+func TestLexer_QuotedIdentUnterminated(t *testing.T) {
+	lex := NewLexer(`"oops`)
+	tok := lex.NextToken()
+	if tok.Type != TokenIllegal {
+		t.Fatalf("got %s, want ILLEGAL for unterminated quoted ident", tok.Type)
+	}
+}
+
+func TestParse_SelectQuotedTableColumns(t *testing.T) {
+	stmt, err := Parse(`SELECT "id" FROM "users"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	assertColumnRef(t, sel.Columns[0], "id")
+	if sel.From.Name != "users" {
+		t.Errorf("from = %q, want users", sel.From.Name)
+	}
+}
+
+func TestParse_SelectSchemaQualifiedQuoted(t *testing.T) {
+	stmt, err := Parse(`SELECT * FROM "public"."names"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From.Schema != "public" {
+		t.Errorf("schema = %q, want public", sel.From.Schema)
+	}
+	if sel.From.Name != "names" {
+		t.Errorf("name = %q, want names", sel.From.Name)
+	}
+}
+
+func TestParse_SelectReservedWordAsColumn(t *testing.T) {
+	stmt, err := Parse(`SELECT "select" FROM t`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	assertColumnRef(t, sel.Columns[0], "select")
+}
+
+func TestParse_CreateTableReservedWords(t *testing.T) {
+	stmt, err := Parse(`CREATE TABLE "table" ("select" INTEGER, "from" TEXT)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := stmt.(*CreateTableStmt)
+	if ct.Name.Name != "table" {
+		t.Errorf("table name = %q, want table", ct.Name.Name)
+	}
+	if ct.Columns[0].Name != "select" {
+		t.Errorf("col[0] = %q, want select", ct.Columns[0].Name)
+	}
+	if ct.Columns[1].Name != "from" {
+		t.Errorf("col[1] = %q, want from", ct.Columns[1].Name)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Dot token / schema-qualified names
 // ---------------------------------------------------------------------------
 
