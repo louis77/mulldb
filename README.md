@@ -351,12 +351,22 @@ psql / PG drivers
 
 ### Concurrency Model
 
-The storage engine uses `sync.RWMutex` for single-writer / multi-reader access:
+Multiple clients can connect simultaneously. The server spawns a goroutine per connection (`server/server.go`), and all goroutines share a single stateless executor that forwards calls to the storage engine.
 
-- **Write operations** (CreateTable, DropTable, Insert, Update, Delete) hold the exclusive write lock
-- **Read operations** (GetTable, Scan) hold the shared read lock
-- **Scan** returns a snapshot iterator that copies row data, so it's safe to use after the read lock is released
-- The server spawns a goroutine per connection, so multiple clients can read concurrently
+**Global RWMutex.** The storage engine (`storage/engine.go`) uses a single `sync.RWMutex` to protect all state:
+
+| Lock mode | Operations |
+|-----------|-----------|
+| Read lock (`RLock`) | `GetTable`, `ListTables`, `Scan`, `LookupByPK` |
+| Write lock (`Lock`) | `CreateTable`, `DropTable`, `Insert`, `Update`, `Delete` |
+
+Multiple readers can run concurrently across any tables. Only one writer can proceed at a time, and it blocks all readers while held. The lock is global, not per-table — a write to table A blocks reads from table B.
+
+**Snapshot iterators.** `Scan` copies all matching rows into a new slice while the read lock is held, then returns an iterator over that private snapshot. The iterator is safe to consume after the lock is released. `LookupByPK` similarly returns a copied row.
+
+**WAL and index safety.** Neither the WAL (`storage/wal.go`) nor the B-tree index (`storage/index/btree.go`) have internal locks. They rely on being called only while the engine's global lock is held.
+
+**Atomic batch writes.** Multi-row `INSERT` and `UPDATE` validate all constraints (PK uniqueness, column count) before writing anything. If validation passes, WAL entries are written and in-memory state is updated within a single lock acquisition — no partial writes on constraint violation.
 
 ### Persistence
 
@@ -405,6 +415,7 @@ mulldb/
 ├── go.mod
 ├── PLAN.md                 Design document
 ├── DESIGN.md               Architecture details and WAL format
+├── STANDARD.md             SQL standard (Core SQL) conformance checklist
 ├── CLAUDE.md               Project conventions (AI-assistant facing)
 │
 ├── config/

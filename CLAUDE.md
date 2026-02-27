@@ -5,6 +5,7 @@ A lightweight SQL database written in Go that speaks the PostgreSQL wire protoco
 See [README.md](README.md) for features, SQL reference, configuration, architecture overview, and usage instructions.
 See [PLAN.md](PLAN.md) for the full architecture, implementation phases, and design decisions.
 See [DESIGN.md](DESIGN.md) for detailed architecture notes and WAL format specification.
+See [STANDARD.md](STANDARD.md) for the SQL standard (Core SQL) conformance checklist.
 
 ## Project Goals
 
