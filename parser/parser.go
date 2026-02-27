@@ -307,6 +307,33 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
+	// Parse optional ORDER BY col [ASC|DESC] [, col [ASC|DESC], ...]
+	var orderBy []OrderByClause
+	if p.cur.Type == TokenOrder {
+		p.next() // consume ORDER
+		if _, err := p.expect(TokenBy); err != nil {
+			return nil, err
+		}
+		for {
+			col, err := p.expect(TokenIdent)
+			if err != nil {
+				return nil, err
+			}
+			clause := OrderByClause{Column: col.Literal}
+			if p.cur.Type == TokenDesc {
+				clause.Desc = true
+				p.next()
+			} else if p.cur.Type == TokenAsc {
+				p.next()
+			}
+			orderBy = append(orderBy, clause)
+			if p.cur.Type != TokenComma {
+				break
+			}
+			p.next() // consume comma
+		}
+	}
+
 	// Parse optional LIMIT and OFFSET (in either order).
 	var limit, offset *int64
 	for i := 0; i < 2; i++ {
@@ -337,7 +364,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
-	return &SelectStmt{Columns: columns, From: from, Where: where, Limit: limit, Offset: offset}, nil
+	return &SelectStmt{Columns: columns, From: from, Where: where, OrderBy: orderBy, Limit: limit, Offset: offset}, nil
 }
 
 func (p *parser) parseUpdate() (*UpdateStmt, error) {

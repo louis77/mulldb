@@ -101,6 +101,7 @@ The AST uses two marker interfaces — `Statement` and `Expr` — with unexporte
 
 A few design specifics worth noting:
 
+- **ORDER BY** is `[]OrderByClause` on `SelectStmt`, where each clause has a column name and a `Desc` bool. A nil slice means no ORDER BY. Parsed after WHERE and before LIMIT/OFFSET, matching SQL clause ordering.
 - **LIMIT and OFFSET** are `*int64` pointers on `SelectStmt`. A nil pointer means the clause was omitted; a zero-valued pointer means the user explicitly wrote `LIMIT 0`. This distinction matters for correct semantics.
 - **Table references** are a `TableRef` struct with optional `Schema` and required `Name` fields, supporting both `users` and `information_schema.tables`.
 - **Aliases** are represented by wrapping any expression in an `AliasExpr`, keeping the alias orthogonal to the expression type.
@@ -261,6 +262,18 @@ Before falling back to a full table scan, the executor checks if the WHERE claus
 
 The check is deliberately narrow: only exact equality on a single PK column, with a literal value, and no other conditions. Anything more complex falls through to the scan path. This keeps the optimizer trivial while covering the highest-value case.
 
+### ORDER BY
+
+When a SELECT includes ORDER BY, the executor switches from a streaming row-emission path to a buffered sort path. All matching rows (after WHERE filtering) are collected into a `[]storage.Row` slice, sorted with `sort.SliceStable()`, and then LIMIT/OFFSET is applied to the sorted result.
+
+The sort comparator is built from the ORDER BY columns at plan time. For each sort key, the executor resolves the column index and direction (ASC/DESC). Multi-column sorting compares left-to-right — the first non-equal comparison wins. NULL values always sort last regardless of direction: in ASC order, NULLs come after all non-NULL values; in DESC order, NULLs still come last. This matches PostgreSQL's default `NULLS LAST` behavior.
+
+The stable sort preserves insertion order for rows with equal sort keys, giving deterministic results without a tiebreaker column.
+
+When ORDER BY is absent, the executor keeps the existing streaming path with early LIMIT termination — no rows are buffered, and the scan stops as soon as LIMIT is satisfied. This means adding ORDER BY support has zero performance impact on queries that don't use it.
+
+ORDER BY with aggregate queries (COUNT, SUM, etc.) returns SQLSTATE `0A000` (feature not supported), since ORDER BY on a single aggregate result row is meaningless without GROUP BY.
+
 ### Catalog Tables
 
 PostgreSQL clients expect to query system catalogs like `pg_catalog.pg_type` and `information_schema.tables`. The executor maintains a registry of virtual catalog tables that are populated on demand from the storage engine's metadata. These tables participate in normal SELECT execution — the same WHERE, LIMIT, OFFSET, and column projection logic applies.
@@ -311,5 +324,5 @@ On shutdown (SIGINT/SIGTERM), the server closes the listener (stopping new conne
 - **Extended query protocol:** Prepared statements and parameter binding would double the wire protocol code. The simple query flow covers all interactive use cases.
 - **Disk-based storage:** All data lives in memory (reconstructed from WAL on startup). A disk-based B-tree or LSM tree would be the natural next step for datasets larger than RAM.
 - **Query optimizer:** There is no cost-based optimizer. The only optimization is the PK index lookup. Everything else is a sequential scan with filter. This is fine for small tables and keeps execution predictable.
-- **GROUP BY / HAVING / JOIN:** These require more complex execution operators (hash join, sort-merge, grouping). The current aggregate path handles the simplest case (whole-table aggregation).
+- **GROUP BY / HAVING / JOIN:** These require more complex execution operators (hash join, sort-merge, grouping). The current aggregate path handles the simplest case (whole-table aggregation). ORDER BY is supported for non-aggregate queries.
 - **MVCC:** Readers see the latest committed state. There is no multi-version concurrency control or snapshot isolation across statements.

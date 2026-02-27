@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -250,6 +251,12 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		}
 	}
 	if hasAgg {
+		if len(s.OrderBy) > 0 {
+			return nil, &QueryError{
+				Code:    "0A000",
+				Message: "ORDER BY is not supported with aggregate functions without GROUP BY",
+			}
+		}
 		return e.execSelectAggregate(s, def, tr)
 	}
 
@@ -266,6 +273,20 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		if err != nil {
 			return nil, WrapError(err)
 		}
+	}
+
+	// Validate ORDER BY columns and resolve their indices.
+	type orderKey struct {
+		colIdx int
+		desc   bool
+	}
+	var orderKeys []orderKey
+	for _, ob := range s.OrderBy {
+		idx := columnIndex(def, ob.Column)
+		if idx < 0 {
+			return nil, WrapError(fmt.Errorf("column %q not found in table %q", ob.Column, def.Name))
+		}
+		orderKeys = append(orderKeys, orderKey{colIdx: idx, desc: ob.Desc})
 	}
 
 	if tr != nil {
@@ -330,31 +351,108 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 	}
 
 	var resultRows [][][]byte
-	var matched int64
 	var scanned int64
-	for {
-		row, ok := it.Next()
-		if !ok {
-			break
+
+	if len(orderKeys) > 0 {
+		// ORDER BY path: collect all matching rows, sort, then apply LIMIT/OFFSET.
+		var matched []storage.Row
+		for {
+			row, ok := it.Next()
+			if !ok {
+				break
+			}
+			scanned++
+			if filter != nil && !filter(row) {
+				continue
+			}
+			matched = append(matched, row)
 		}
-		scanned++
-		if filter != nil && !filter(row) {
-			continue
+
+		// Sort using stable sort to preserve insertion order for equal keys.
+		var sortStart time.Time
+		if tr != nil {
+			sortStart = time.Now()
 		}
-		matched++
-		if matched <= offset {
-			continue
+		sort.SliceStable(matched, func(i, j int) bool {
+			for _, key := range orderKeys {
+				av := matched[i].Values[key.colIdx]
+				bv := matched[j].Values[key.colIdx]
+
+				// NULLs always sort last regardless of direction.
+				if av == nil && bv == nil {
+					continue
+				}
+				if av == nil {
+					return false // NULL sorts last
+				}
+				if bv == nil {
+					return true // NULL sorts last
+				}
+
+				cmp := storage.CompareValues(av, bv)
+				if cmp == 0 {
+					continue
+				}
+				if key.desc {
+					return cmp > 0
+				}
+				return cmp < 0
+			}
+			return false
+		})
+		if tr != nil {
+			tr.Sort = time.Since(sortStart)
 		}
-		if limit == 0 {
-			break
+
+		// Apply OFFSET.
+		start := int64(0)
+		if offset > 0 {
+			start = offset
 		}
-		textRow := make([][]byte, len(colEvals))
-		for i, eval := range colEvals {
-			textRow[i] = formatValue(eval(row))
+		if start > int64(len(matched)) {
+			start = int64(len(matched))
 		}
-		resultRows = append(resultRows, textRow)
-		if limit > 0 && int64(len(resultRows)) >= limit {
-			break
+
+		// Apply LIMIT.
+		end := int64(len(matched))
+		if limit >= 0 && start+limit < end {
+			end = start + limit
+		}
+
+		for _, row := range matched[start:end] {
+			textRow := make([][]byte, len(colEvals))
+			for i, eval := range colEvals {
+				textRow[i] = formatValue(eval(row))
+			}
+			resultRows = append(resultRows, textRow)
+		}
+	} else {
+		// No ORDER BY: streaming path with early LIMIT termination.
+		var matched int64
+		for {
+			row, ok := it.Next()
+			if !ok {
+				break
+			}
+			scanned++
+			if filter != nil && !filter(row) {
+				continue
+			}
+			matched++
+			if matched <= offset {
+				continue
+			}
+			if limit == 0 {
+				break
+			}
+			textRow := make([][]byte, len(colEvals))
+			for i, eval := range colEvals {
+				textRow[i] = formatValue(eval(row))
+			}
+			resultRows = append(resultRows, textRow)
+			if limit > 0 && int64(len(resultRows)) >= limit {
+				break
+			}
 		}
 	}
 

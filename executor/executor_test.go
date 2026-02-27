@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"mulldb/storage"
 )
@@ -757,13 +758,13 @@ func TestExecutor_PrimaryKey_DeleteAndReinsert(t *testing.T) {
 
 func TestExecutor_PrimaryKey_TextKey(t *testing.T) {
 	e := setup(t)
-	exec(t, e, "CREATE TABLE codes (code TEXT PRIMARY KEY, desc TEXT)")
+	exec(t, e, `CREATE TABLE codes (code TEXT PRIMARY KEY, "desc" TEXT)`)
 	exec(t, e, "INSERT INTO codes VALUES ('US', 'United States'), ('UK', 'United Kingdom')")
 
 	_, err := e.Execute("INSERT INTO codes VALUES ('US', 'duplicate')")
 	assertSQLSTATE(t, err, "23505")
 
-	r := exec(t, e, "SELECT desc FROM codes WHERE code = 'UK'")
+	r := exec(t, e, `SELECT "desc" FROM codes WHERE code = 'UK'`)
 	if len(r.Rows) != 1 || string(r.Rows[0][0]) != "United Kingdom" {
 		t.Errorf("text PK lookup: got %v", r.Rows)
 	}
@@ -904,6 +905,24 @@ func TestTraceToResult(t *testing.T) {
 	if len(r.Rows) < 8 {
 		t.Errorf("rows = %d, want at least 8", len(r.Rows))
 	}
+
+	// With Sort > 0, should include a Sort row.
+	tr2 := &Trace{
+		StmtType: "SELECT",
+		Table:    "users",
+		Sort:     5 * time.Microsecond,
+	}
+	r2 := TraceToResult(tr2)
+	hasSortRow := false
+	for _, row := range r2.Rows {
+		if string(row[0]) == "Sort" {
+			hasSortRow = true
+			break
+		}
+	}
+	if !hasSortRow {
+		t.Error("expected Sort row in trace when Sort > 0")
+	}
 }
 
 func TestExecutor_SelectLiterals(t *testing.T) {
@@ -998,6 +1017,195 @@ func TestExecutor_SelectLiterals(t *testing.T) {
 			t.Errorf("row[0][2] = %q, want t", r.Rows[0][2])
 		}
 	})
+}
+
+// -------------------------------------------------------------------------
+// ORDER BY
+// -------------------------------------------------------------------------
+
+func TestExecutor_OrderBy_IntegerAsc(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'c'), (1, 'a'), (2, 'b')")
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY id")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" || string(r.Rows[1][0]) != "2" || string(r.Rows[2][0]) != "3" {
+		t.Errorf("order = [%s, %s, %s], want [1, 2, 3]",
+			r.Rows[0][0], r.Rows[1][0], r.Rows[2][0])
+	}
+}
+
+func TestExecutor_OrderBy_IntegerDesc(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'c'), (1, 'a'), (2, 'b')")
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY id DESC")
+	if string(r.Rows[0][0]) != "3" || string(r.Rows[1][0]) != "2" || string(r.Rows[2][0]) != "1" {
+		t.Errorf("order = [%s, %s, %s], want [3, 2, 1]",
+			r.Rows[0][0], r.Rows[1][0], r.Rows[2][0])
+	}
+}
+
+func TestExecutor_OrderBy_TextAsc(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES ('charlie'), ('alice'), ('bob')")
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY name")
+	if string(r.Rows[0][0]) != "alice" || string(r.Rows[1][0]) != "bob" || string(r.Rows[2][0]) != "charlie" {
+		t.Errorf("order = [%s, %s, %s], want [alice, bob, charlie]",
+			r.Rows[0][0], r.Rows[1][0], r.Rows[2][0])
+	}
+}
+
+func TestExecutor_OrderBy_TextDesc(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES ('charlie'), ('alice'), ('bob')")
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY name DESC")
+	if string(r.Rows[0][0]) != "charlie" || string(r.Rows[1][0]) != "bob" || string(r.Rows[2][0]) != "alice" {
+		t.Errorf("order = [%s, %s, %s], want [charlie, bob, alice]",
+			r.Rows[0][0], r.Rows[1][0], r.Rows[2][0])
+	}
+}
+
+func TestExecutor_OrderBy_MultiColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (score INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (90, 'charlie'), (90, 'alice'), (70, 'dave'), (80, 'bob')")
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY score DESC, name")
+	// Expected: (90,alice), (90,charlie), (80,bob), (70,dave)
+	want := []struct{ score, name string }{
+		{"90", "alice"}, {"90", "charlie"}, {"80", "bob"}, {"70", "dave"},
+	}
+	if len(r.Rows) != 4 {
+		t.Fatalf("rows = %d, want 4", len(r.Rows))
+	}
+	for i, w := range want {
+		if string(r.Rows[i][0]) != w.score || string(r.Rows[i][1]) != w.name {
+			t.Errorf("row[%d] = (%s, %s), want (%s, %s)",
+				i, r.Rows[i][0], r.Rows[i][1], w.score, w.name)
+		}
+	}
+}
+
+func TestExecutor_OrderBy_NullsLast(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, score INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1, 90), (2, NULL), (3, 70), (4, NULL)")
+
+	// ASC: NULLs should be last.
+	r := exec(t, e, "SELECT * FROM t ORDER BY score")
+	if len(r.Rows) != 4 {
+		t.Fatalf("rows = %d, want 4", len(r.Rows))
+	}
+	if string(r.Rows[0][1]) != "70" {
+		t.Errorf("row[0].score = %q, want 70", r.Rows[0][1])
+	}
+	if string(r.Rows[1][1]) != "90" {
+		t.Errorf("row[1].score = %q, want 90", r.Rows[1][1])
+	}
+	if r.Rows[2][1] != nil {
+		t.Errorf("row[2].score = %q, want NULL", r.Rows[2][1])
+	}
+	if r.Rows[3][1] != nil {
+		t.Errorf("row[3].score = %q, want NULL", r.Rows[3][1])
+	}
+
+	// DESC: NULLs should still be last.
+	r = exec(t, e, "SELECT * FROM t ORDER BY score DESC")
+	if string(r.Rows[0][1]) != "90" {
+		t.Errorf("desc row[0].score = %q, want 90", r.Rows[0][1])
+	}
+	if string(r.Rows[1][1]) != "70" {
+		t.Errorf("desc row[1].score = %q, want 70", r.Rows[1][1])
+	}
+	if r.Rows[2][1] != nil {
+		t.Errorf("desc row[2].score = %q, want NULL", r.Rows[2][1])
+	}
+	if r.Rows[3][1] != nil {
+		t.Errorf("desc row[3].score = %q, want NULL", r.Rows[3][1])
+	}
+}
+
+func TestExecutor_OrderBy_WithLimitOffset(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'c'), (1, 'a'), (5, 'e'), (2, 'b'), (4, 'd')")
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY id LIMIT 2 OFFSET 1")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	// Sorted: 1,2,3,4,5; offset 1 → skip 1; limit 2 → [2, 3]
+	if string(r.Rows[0][0]) != "2" || string(r.Rows[1][0]) != "3" {
+		t.Errorf("order = [%s, %s], want [2, 3]", r.Rows[0][0], r.Rows[1][0])
+	}
+}
+
+func TestExecutor_OrderBy_NonexistentColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a')")
+
+	_, err := e.Execute("SELECT * FROM t ORDER BY nonexistent")
+	if err == nil {
+		t.Fatal("expected error for ORDER BY nonexistent column")
+	}
+}
+
+func TestExecuteTraced_OrderBy(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'c'), (1, 'a'), (2, 'b')")
+
+	result, tr, err := e.ExecuteTraced("SELECT * FROM t ORDER BY id")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if len(result.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(result.Rows))
+	}
+	if tr.Sort == 0 {
+		t.Error("Sort duration should be non-zero for ORDER BY query")
+	}
+	// Verify sorted order.
+	if string(result.Rows[0][0]) != "1" || string(result.Rows[1][0]) != "2" || string(result.Rows[2][0]) != "3" {
+		t.Errorf("order = [%s, %s, %s], want [1, 2, 3]",
+			result.Rows[0][0], result.Rows[1][0], result.Rows[2][0])
+	}
+}
+
+func TestExecuteTraced_NoOrderBy_ZeroSort(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2)")
+
+	_, tr, err := e.ExecuteTraced("SELECT * FROM t")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if tr.Sort != 0 {
+		t.Errorf("Sort = %v, want 0 for query without ORDER BY", tr.Sort)
+	}
+}
+
+func TestExecutor_OrderBy_AggregateError(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2), (3)")
+
+	_, err := e.Execute("SELECT COUNT(*) FROM t ORDER BY val")
+	if err == nil {
+		t.Fatal("expected error for ORDER BY with aggregates")
+	}
+	assertSQLSTATE(t, err, "0A000")
 }
 
 func assertSQLSTATE(t *testing.T, err error, expected string) {

@@ -135,8 +135,8 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | ID | Feature | Status |
 |----|---------|--------|
 | E121-01 | DECLARE CURSOR | Open |
-| E121-02 | ORDER BY columns need not be in select list | Open |
-| E121-03 | Value expressions in ORDER BY clause | Open |
+| E121-02 | ORDER BY columns need not be in select list | **Done** (ORDER BY references table columns, not select list) |
+| E121-03 | Value expressions in ORDER BY clause | **Partial** (column names only; no expressions or ordinal positions) |
 | E121-04 | OPEN statement | Open |
 | E121-06 | Positioned UPDATE statement | Open |
 | E121-07 | Positioned DELETE statement | Open |
@@ -345,15 +345,16 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~30 |
-| **Partial** | ~7 |
-| **Open** | ~140 |
+| **Done** | ~31 |
+| **Partial** | ~8 |
+| **Open** | ~138 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
 - Primary key constraints with B-tree index
 - Identifiers (delimited and case-insensitive)
 - Aggregate functions (COUNT, SUM, MIN, MAX)
+- ORDER BY (single/multi-column, ASC/DESC, NULLs last)
 - Information schema (TABLES, COLUMNS views)
 - SQLSTATE error codes
 - Wire protocol compatibility (host language binding)
@@ -363,9 +364,8 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 2. **Expressions**: Arithmetic in SELECT/WHERE, CASE, CAST, COALESCE
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: No multi-table queries yet
-5. **ORDER BY**: Not implemented
-6. **Transactions**: No BEGIN / COMMIT / ROLLBACK
-7. **Data types**: No floating-point, decimal, or date/time types
-8. **Constraints**: No UNIQUE, FOREIGN KEY, CHECK, DEFAULT
-9. **Subqueries**: No subquery support anywhere
-10. **UNION / EXCEPT**: No set operations
+5. **Transactions**: No BEGIN / COMMIT / ROLLBACK
+6. **Data types**: No floating-point, decimal, or date/time types
+7. **Constraints**: No UNIQUE, FOREIGN KEY, CHECK, DEFAULT
+8. **Subqueries**: No subquery support anywhere
+9. **UNION / EXCEPT**: No set operations

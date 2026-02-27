@@ -15,6 +15,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
   - [Data Types](#data-types)
   - [Aggregate Functions](#aggregate-functions)
   - [Column Aliases (AS)](#column-aliases-as)
+  - [ORDER BY](#order-by)
   - [LIMIT and OFFSET](#limit-and-offset)
   - [Scalar Functions](#scalar-functions)
   - [Catalog Tables](#catalog-tables)
@@ -35,7 +36,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
-- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE
+- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Scalar functions** — `VERSION()` and a registration pattern for adding more
@@ -139,6 +140,8 @@ SELECT * FROM <table>;
 SELECT <columns> FROM <table> WHERE <condition>;
 SELECT <expr> AS <alias>, ... FROM <table>;  -- column aliases
 SELECT id, 'tag', 42 FROM <table>;          -- literals in column list
+SELECT * FROM <table> ORDER BY <col> [ASC|DESC], ...;  -- sorted results
+SELECT * FROM <table> ORDER BY <col> LIMIT <n>;       -- sorted + limited
 SELECT * FROM <table> LIMIT <n>;             -- return at most n rows
 SELECT * FROM <table> OFFSET <n>;            -- skip first n rows
 SELECT * FROM <table> LIMIT <n> OFFSET <m>;  -- pagination
@@ -252,6 +255,49 @@ SELECT 1 AS num, 'hello' AS greeting;
 --  num | greeting
 -- -----+----------
 --    1 | hello
+```
+
+### ORDER BY
+
+`ORDER BY` sorts the result set by one or more columns. Each column can specify `ASC` (ascending, the default) or `DESC` (descending). Multi-column sorts compare left-to-right — the second column only matters when the first column has equal values.
+
+NULL values always sort last, regardless of sort direction.
+
+ORDER BY is applied before LIMIT and OFFSET, making it possible to get deterministic paginated results. ORDER BY is not supported with aggregate queries (no GROUP BY yet).
+
+**Examples:**
+
+```sql
+CREATE TABLE scores (id INTEGER PRIMARY KEY, name TEXT, score INTEGER);
+INSERT INTO scores VALUES (1, 'alice', 90), (2, 'bob', 70), (3, 'charlie', 90), (4, 'dave', NULL);
+
+SELECT * FROM scores ORDER BY score;
+--  id |  name   | score
+-- ----+---------+-------
+--   2 | bob     |    70
+--   1 | alice   |    90
+--   3 | charlie |    90
+--   4 | dave    |
+
+SELECT * FROM scores ORDER BY score DESC, name;
+--  id |  name   | score
+-- ----+---------+-------
+--   1 | alice   |    90
+--   3 | charlie |    90
+--   2 | bob     |    70
+--   4 | dave    |
+
+SELECT * FROM scores ORDER BY score LIMIT 2;
+--  id | name | score
+-- ----+------+-------
+--   2 | bob  |    70
+--   1 | alice|    90
+
+SELECT * FROM scores ORDER BY score LIMIT 2 OFFSET 1;
+--  id |  name   | score
+-- ----+---------+-------
+--   1 | alice   |    90
+--   3 | charlie |    90
 ```
 
 ### LIMIT and OFFSET
@@ -571,9 +617,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, column aliases (AS), optional FROM clause, UTF-8 identifiers and string literals, error cases
+- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 
@@ -590,6 +636,7 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 | `42803` | Grouping error | Mixing aggregate and non-aggregate columns |
 | `42809` | Wrong object type | `INSERT INTO pg_type ...` (catalog is read-only) |
 | `42883` | Undefined function | Unknown aggregate function or type mismatch |
+| `0A000` | Feature not supported | ORDER BY with aggregates (no GROUP BY) |
 
 ## Limitations
 
@@ -599,7 +646,7 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **Multi-column primary keys** — only single-column PRIMARY KEY is supported
 - **Transactions** — no BEGIN/COMMIT/ROLLBACK
 - **JOINs** — single-table queries only
-- **ORDER BY / GROUP BY / HAVING**
+- **GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
 - **ALTER TABLE**
 - **Expressions in SELECT** — arithmetic like `1 + 2` is not supported; literals and scalar functions work both with and without `FROM`

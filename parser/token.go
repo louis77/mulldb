@@ -58,6 +58,10 @@ const (
 	TokenOffset    // OFFSET
 	TokenPrimary   // PRIMARY
 	TokenKey       // KEY
+	TokenOrder     // ORDER
+	TokenBy        // BY
+	TokenAsc       // ASC
+	TokenDesc      // DESC
 )
 
 var tokenNames = map[TokenType]string{
@@ -104,6 +108,10 @@ var tokenNames = map[TokenType]string{
 	TokenOffset:    "OFFSET",
 	TokenPrimary:   "PRIMARY",
 	TokenKey:       "KEY",
+	TokenOrder:     "ORDER",
+	TokenBy:        "BY",
+	TokenAsc:       "ASC",
+	TokenDesc:      "DESC",
 }
 
 func (t TokenType) String() string {
@@ -150,6 +158,10 @@ var keywords = map[string]TokenType{
 	"OFFSET":  TokenOffset,
 	"PRIMARY": TokenPrimary,
 	"KEY":     TokenKey,
+	"ORDER":   TokenOrder,
+	"BY":      TokenBy,
+	"ASC":     TokenAsc,
+	"DESC":    TokenDesc,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

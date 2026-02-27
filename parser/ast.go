@@ -73,13 +73,20 @@ type InsertStmt struct {
 	Values  [][]Expr
 }
 
-// SelectStmt: SELECT <cols> FROM <table> [WHERE <expr>] [LIMIT n] [OFFSET n]
+// OrderByClause represents a single column in an ORDER BY clause.
+type OrderByClause struct {
+	Column string // column name
+	Desc   bool   // true = DESC, false = ASC (default)
+}
+
+// SelectStmt: SELECT <cols> FROM <table> [WHERE <expr>] [ORDER BY ...] [LIMIT n] [OFFSET n]
 type SelectStmt struct {
 	Columns []Expr // StarExpr for *, ColumnRef for named columns
 	From    TableRef
-	Where   Expr   // nil when no WHERE clause
-	Limit   *int64 // nil = no limit
-	Offset  *int64 // nil = no offset
+	Where   Expr             // nil when no WHERE clause
+	OrderBy []OrderByClause  // nil when no ORDER BY clause
+	Limit   *int64           // nil = no limit
+	Offset  *int64           // nil = no offset
 }
 
 // UpdateStmt: UPDATE <table> SET <sets> [WHERE <expr>]

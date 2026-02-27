@@ -12,6 +12,7 @@ type Trace struct {
 	Parse        time.Duration // lexer + parser
 	Plan         time.Duration // column resolution, filter building, aggregate detection
 	Exec         time.Duration // storage engine calls (scan, insert, update, delete)
+	Sort         time.Duration // ORDER BY sorting (zero when no ORDER BY)
 	RowsScanned  int64
 	RowsReturned int64
 	UsedIndex    bool
@@ -42,9 +43,16 @@ func TraceToResult(tr *Trace) *Result {
 		{[]byte("Parse"), []byte(tr.Parse.String())},
 		{[]byte("Plan"), []byte(tr.Plan.String())},
 		{[]byte("Execute"), []byte(tr.Exec.String())},
-		{[]byte("Total"), []byte(tr.Total.String())},
-		{[]byte("Statement"), []byte(tr.StmtType)},
 	}
+
+	if tr.Sort > 0 {
+		rows = append(rows, [][]byte{[]byte("Sort"), []byte(tr.Sort.String())})
+	}
+
+	rows = append(rows,
+		[][]byte{[]byte("Total"), []byte(tr.Total.String())},
+		[][]byte{[]byte("Statement"), []byte(tr.StmtType)},
+	)
 
 	if tr.Table != "" {
 		rows = append(rows, [][]byte{[]byte("Table"), []byte(tr.Table)})

@@ -983,6 +983,89 @@ func TestTableRef_String(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ORDER BY
+// ---------------------------------------------------------------------------
+
+func TestParse_SelectOrderBySingle(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t ORDER BY name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.OrderBy) != 1 {
+		t.Fatalf("orderby = %d, want 1", len(sel.OrderBy))
+	}
+	if sel.OrderBy[0].Column != "name" {
+		t.Errorf("column = %q, want name", sel.OrderBy[0].Column)
+	}
+	if sel.OrderBy[0].Desc {
+		t.Error("desc = true, want false (default ASC)")
+	}
+}
+
+func TestParse_SelectOrderByDesc(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t ORDER BY name DESC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.OrderBy) != 1 {
+		t.Fatalf("orderby = %d, want 1", len(sel.OrderBy))
+	}
+	if !sel.OrderBy[0].Desc {
+		t.Error("desc = false, want true")
+	}
+}
+
+func TestParse_SelectOrderByMultiColumn(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t ORDER BY name ASC, age DESC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.OrderBy) != 2 {
+		t.Fatalf("orderby = %d, want 2", len(sel.OrderBy))
+	}
+	if sel.OrderBy[0].Column != "name" || sel.OrderBy[0].Desc {
+		t.Errorf("orderby[0] = %+v, want {name, ASC}", sel.OrderBy[0])
+	}
+	if sel.OrderBy[1].Column != "age" || !sel.OrderBy[1].Desc {
+		t.Errorf("orderby[1] = %+v, want {age, DESC}", sel.OrderBy[1])
+	}
+}
+
+func TestParse_SelectOrderByWithLimit(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t ORDER BY name LIMIT 10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.OrderBy) != 1 {
+		t.Fatalf("orderby = %d, want 1", len(sel.OrderBy))
+	}
+	if sel.Limit == nil || *sel.Limit != 10 {
+		t.Errorf("limit = %v, want 10", sel.Limit)
+	}
+}
+
+func TestParse_SelectOrderByWithLimitOffset(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t ORDER BY name LIMIT 10 OFFSET 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.OrderBy) != 1 {
+		t.Fatalf("orderby = %d, want 1", len(sel.OrderBy))
+	}
+	if sel.Limit == nil || *sel.Limit != 10 {
+		t.Errorf("limit = %v, want 10", sel.Limit)
+	}
+	if sel.Offset == nil || *sel.Offset != 5 {
+		t.Errorf("offset = %v, want 5", sel.Offset)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
