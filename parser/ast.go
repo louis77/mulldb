@@ -143,6 +143,12 @@ type FunctionCallExpr struct {
 	Args []Expr // COUNT(*) → []*StarExpr; column aggs → []*ColumnRef
 }
 
+// AliasExpr wraps an expression with a column alias (e.g. COUNT(*) AS total).
+type AliasExpr struct {
+	Expr  Expr
+	Alias string
+}
+
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
@@ -151,3 +157,4 @@ func (*BoolLit) exprNode()           {}
 func (*NullLit) exprNode()           {}
 func (*BinaryExpr) exprNode()        {}
 func (*FunctionCallExpr) exprNode()  {}
+func (*AliasExpr) exprNode()         {}

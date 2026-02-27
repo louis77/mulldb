@@ -122,7 +122,11 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 	// Detect aggregate vs non-aggregate columns.
 	hasAgg, hasNonAgg := false, false
 	for _, col := range s.Columns {
-		if _, ok := col.(*parser.FunctionCallExpr); ok {
+		expr := col
+		if a, ok := expr.(*parser.AliasExpr); ok {
+			expr = a.Expr
+		}
+		if _, ok := expr.(*parser.FunctionCallExpr); ok {
 			hasAgg = true
 		} else {
 			hasNonAgg = true
@@ -204,7 +208,14 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 	resultCols := make([]Column, len(s.Columns))
 
 	for i, expr := range s.Columns {
-		fn := expr.(*parser.FunctionCallExpr)
+		// Unwrap alias if present.
+		alias := ""
+		inner := expr
+		if a, ok := inner.(*parser.AliasExpr); ok {
+			alias = a.Alias
+			inner = a.Expr
+		}
+		fn := inner.(*parser.FunctionCallExpr)
 		acc := &aggAcc{funcName: fn.Name, colIdx: -1}
 
 		if len(fn.Args) == 1 {
@@ -240,8 +251,12 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		}
 
 		accs[i] = acc
+		colName := strings.ToLower(fn.Name)
+		if alias != "" {
+			colName = alias
+		}
 		resultCols[i] = Column{
-			Name:     strings.ToLower(fn.Name),
+			Name:     colName,
 			TypeOID:  aggregateTypeOID(fn.Name, acc.inputType),
 			TypeSize: aggregateTypeSize(fn.Name, acc.inputType),
 		}
@@ -325,9 +340,19 @@ func execSelectStatic(exprs []parser.Expr) (*Result, error) {
 	var row [][]byte
 
 	for _, expr := range exprs {
-		val, col, err := evalStaticExpr(expr)
+		// Unwrap alias if present.
+		alias := ""
+		inner := expr
+		if a, ok := inner.(*parser.AliasExpr); ok {
+			alias = a.Alias
+			inner = a.Expr
+		}
+		val, col, err := evalStaticExpr(inner)
 		if err != nil {
 			return nil, err
+		}
+		if alias != "" {
+			col.Name = alias
 		}
 		cols = append(cols, col)
 		row = append(row, formatValue(val))
@@ -413,7 +438,15 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]int, []
 	var cols []Column
 
 	for _, expr := range exprs {
-		switch e := expr.(type) {
+		// Unwrap alias if present.
+		alias := ""
+		inner := expr
+		if a, ok := inner.(*parser.AliasExpr); ok {
+			alias = a.Alias
+			inner = a.Expr
+		}
+
+		switch e := inner.(type) {
 		case *parser.StarExpr:
 			for i, c := range def.Columns {
 				indices = append(indices, i)
@@ -430,13 +463,17 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]int, []
 			}
 			c := def.Columns[idx]
 			indices = append(indices, idx)
+			name := c.Name
+			if alias != "" {
+				name = alias
+			}
 			cols = append(cols, Column{
-				Name:     c.Name,
+				Name:     name,
 				TypeOID:  typeOID(c.DataType),
 				TypeSize: typeSize(c.DataType),
 			})
 		default:
-			return nil, nil, fmt.Errorf("unsupported select expression %T", expr)
+			return nil, nil, fmt.Errorf("unsupported select expression %T", inner)
 		}
 	}
 	return indices, cols, nil

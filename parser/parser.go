@@ -250,6 +250,14 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 			if err != nil {
 				return nil, err
 			}
+			if p.cur.Type == TokenAs {
+				p.next() // consume AS
+				alias, err := p.expect(TokenIdent)
+				if err != nil {
+					return nil, err
+				}
+				expr = &AliasExpr{Expr: expr, Alias: alias.Literal}
+			}
 			columns = append(columns, expr)
 			if p.cur.Type != TokenComma {
 				break

@@ -8,7 +8,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — write-ahead log (WAL) with CRC32 checksums and fsync for crash recovery
-- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE), UPDATE, DELETE
+- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE and column aliases via AS), UPDATE, DELETE
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Scalar functions** — `VERSION()` and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
@@ -104,6 +104,7 @@ INSERT INTO <table> VALUES (<values>);  -- all columns, in order
 -- Query rows
 SELECT * FROM <table>;
 SELECT <columns> FROM <table> WHERE <condition>;
+SELECT <expr> AS <alias>, ... FROM <table>;  -- column aliases
 
 -- Static SELECT (no table required)
 SELECT 1;
@@ -175,6 +176,34 @@ SELECT COUNT(*), SUM(amount), MIN(amount), MAX(amount) FROM orders;
 --  count | sum | min | max
 -- -------+-----+-----+-----
 --      4 |  80 |   5 |  40
+```
+
+### Column Aliases (AS)
+
+Any column expression in a `SELECT` can be renamed with `AS <alias>`. This works with plain columns, aggregate functions, and static expressions.
+
+**Examples:**
+
+```sql
+SELECT name AS username, id AS user_id FROM users;
+--  username | user_id
+-- ----------+---------
+--  alice    |       1
+
+SELECT COUNT(*) AS total FROM orders;
+--  total
+-- -------
+--      4
+
+SELECT COUNT(*) AS n, SUM(amount) AS total FROM orders;
+--  n | total
+-- ---+-------
+--  4 |    80
+
+SELECT 1 AS num, 'hello' AS greeting;
+--  num | greeting
+-- -----+----------
+--    1 | hello
 ```
 
 ### Scalar Functions
@@ -358,9 +387,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, optional FROM clause, error cases
+- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, column aliases (AS), optional FROM clause, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), column aliases, static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 

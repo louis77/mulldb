@@ -434,6 +434,70 @@ func TestExecutor_Aggregate_MixedError(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// AS alias
+// -------------------------------------------------------------------------
+
+func TestExecutor_SelectColumnAlias(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+
+	r := exec(t, e, "SELECT id AS user_id, name AS user_name FROM t")
+	if len(r.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(r.Columns))
+	}
+	if r.Columns[0].Name != "user_id" {
+		t.Errorf("col[0] = %q, want user_id", r.Columns[0].Name)
+	}
+	if r.Columns[1].Name != "user_name" {
+		t.Errorf("col[1] = %q, want user_name", r.Columns[1].Name)
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("row[0][0] = %q, want 1", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "alice" {
+		t.Errorf("row[0][1] = %q, want alice", r.Rows[0][1])
+	}
+}
+
+func TestExecutor_AggregateAlias(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2), (3)")
+
+	r := exec(t, e, "SELECT COUNT(*) AS total, SUM(val) AS total_val FROM t")
+	if len(r.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(r.Columns))
+	}
+	if r.Columns[0].Name != "total" {
+		t.Errorf("col[0] = %q, want total", r.Columns[0].Name)
+	}
+	if r.Columns[1].Name != "total_val" {
+		t.Errorf("col[1] = %q, want total_val", r.Columns[1].Name)
+	}
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("count = %q, want 3", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "6" {
+		t.Errorf("sum = %q, want 6", r.Rows[0][1])
+	}
+}
+
+func TestExecutor_StaticSelectAlias(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 1 AS num, 'hello' AS greeting")
+	if len(r.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(r.Columns))
+	}
+	if r.Columns[0].Name != "num" {
+		t.Errorf("col[0] = %q, want num", r.Columns[0].Name)
+	}
+	if r.Columns[1].Name != "greeting" {
+		t.Errorf("col[1] = %q, want greeting", r.Columns[1].Name)
+	}
+}
+
 func assertSQLSTATE(t *testing.T, err error, expected string) {
 	t.Helper()
 	if err == nil {

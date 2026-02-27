@@ -595,6 +595,84 @@ func TestParse_Aggregate_CaseInsensitive(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AS alias
+// ---------------------------------------------------------------------------
+
+func TestParse_SelectColumnAlias(t *testing.T) {
+	stmt, err := Parse("SELECT id AS user_id, name AS user_name FROM users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(sel.Columns))
+	}
+	a0, ok := sel.Columns[0].(*AliasExpr)
+	if !ok {
+		t.Fatalf("col[0] is %T, want *AliasExpr", sel.Columns[0])
+	}
+	assertColumnRef(t, a0.Expr, "id")
+	if a0.Alias != "user_id" {
+		t.Errorf("alias[0] = %q, want user_id", a0.Alias)
+	}
+	a1, ok := sel.Columns[1].(*AliasExpr)
+	if !ok {
+		t.Fatalf("col[1] is %T, want *AliasExpr", sel.Columns[1])
+	}
+	assertColumnRef(t, a1.Expr, "name")
+	if a1.Alias != "user_name" {
+		t.Errorf("alias[1] = %q, want user_name", a1.Alias)
+	}
+}
+
+func TestParse_SelectAggregateAlias(t *testing.T) {
+	stmt, err := Parse("SELECT COUNT(*) AS total FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(sel.Columns))
+	}
+	a, ok := sel.Columns[0].(*AliasExpr)
+	if !ok {
+		t.Fatalf("col[0] is %T, want *AliasExpr", sel.Columns[0])
+	}
+	fn, ok := a.Expr.(*FunctionCallExpr)
+	if !ok {
+		t.Fatalf("alias.Expr is %T, want *FunctionCallExpr", a.Expr)
+	}
+	if fn.Name != "COUNT" {
+		t.Errorf("fn.Name = %q, want COUNT", fn.Name)
+	}
+	if a.Alias != "total" {
+		t.Errorf("alias = %q, want total", a.Alias)
+	}
+}
+
+func TestParse_SelectMixedAliasNoAlias(t *testing.T) {
+	stmt, err := Parse("SELECT id, name AS n FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(sel.Columns))
+	}
+	// First column: no alias, plain ColumnRef.
+	assertColumnRef(t, sel.Columns[0], "id")
+	// Second column: alias.
+	a, ok := sel.Columns[1].(*AliasExpr)
+	if !ok {
+		t.Fatalf("col[1] is %T, want *AliasExpr", sel.Columns[1])
+	}
+	assertColumnRef(t, a.Expr, "name")
+	if a.Alias != "n" {
+		t.Errorf("alias = %q, want n", a.Alias)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Dot token / schema-qualified names
 // ---------------------------------------------------------------------------
 

@@ -53,6 +53,7 @@ const (
 	TokenIntegerKW // INTEGER (data type keyword)
 	TokenTextKW    // TEXT (data type keyword)
 	TokenBooleanKW // BOOLEAN (data type keyword)
+	TokenAs        // AS
 )
 
 var tokenNames = map[TokenType]string{
@@ -94,6 +95,7 @@ var tokenNames = map[TokenType]string{
 	TokenIntegerKW: "INTEGER",
 	TokenTextKW:    "TEXT",
 	TokenBooleanKW: "BOOLEAN",
+	TokenAs:        "AS",
 }
 
 func (t TokenType) String() string {
@@ -132,6 +134,7 @@ var keywords = map[string]TokenType{
 	"INTEGER": TokenIntegerKW,
 	"TEXT":    TokenTextKW,
 	"BOOLEAN": TokenBooleanKW,
+	"AS":      TokenAs,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent
