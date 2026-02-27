@@ -465,19 +465,31 @@ func (p *parser) parseOr() (Expr, error) {
 }
 
 func (p *parser) parseAnd() (Expr, error) {
-	left, err := p.parseComparison()
+	left, err := p.parseNot()
 	if err != nil {
 		return nil, err
 	}
 	for p.cur.Type == TokenAnd {
 		p.next()
-		right, err := p.parseComparison()
+		right, err := p.parseNot()
 		if err != nil {
 			return nil, err
 		}
 		left = &BinaryExpr{Left: left, Op: "AND", Right: right}
 	}
 	return left, nil
+}
+
+func (p *parser) parseNot() (Expr, error) {
+	if p.cur.Type == TokenNot {
+		p.next()
+		expr, err := p.parseNot()
+		if err != nil {
+			return nil, err
+		}
+		return &NotExpr{Expr: expr}, nil
+	}
+	return p.parseComparison()
 }
 
 func (p *parser) parseComparison() (Expr, error) {

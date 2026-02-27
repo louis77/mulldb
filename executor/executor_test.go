@@ -1310,6 +1310,100 @@ func TestExecutor_Rollback(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// NOT operator
+// -------------------------------------------------------------------------
+
+func TestExecutor_NotBoolean(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, active BOOLEAN)")
+	exec(t, e, "INSERT INTO t VALUES (1, TRUE)")
+	exec(t, e, "INSERT INTO t VALUES (2, FALSE)")
+	exec(t, e, "INSERT INTO t VALUES (3, TRUE)")
+
+	r := exec(t, e, "SELECT * FROM t WHERE NOT active")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "2" {
+		t.Errorf("id = %s, want 2", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_NotComparison(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, x INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1, 3)")
+	exec(t, e, "INSERT INTO t VALUES (2, 7)")
+	exec(t, e, "INSERT INTO t VALUES (3, 10)")
+
+	r := exec(t, e, "SELECT * FROM t WHERE NOT (x > 5)")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("id = %s, want 1", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_NotWithAnd(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, active BOOLEAN)")
+	exec(t, e, "INSERT INTO t VALUES (1, TRUE)")
+	exec(t, e, "INSERT INTO t VALUES (2, FALSE)")
+	exec(t, e, "INSERT INTO t VALUES (3, TRUE)")
+
+	r := exec(t, e, "SELECT * FROM t WHERE NOT active AND id > 1")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "2" {
+		t.Errorf("id = %s, want 2", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_NotNull(t *testing.T) {
+	// NOT on NULL should yield NULL (row excluded)
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, active BOOLEAN)")
+	exec(t, e, "INSERT INTO t VALUES (1, TRUE)")
+	exec(t, e, "INSERT INTO t VALUES (2, NULL)")
+	exec(t, e, "INSERT INTO t VALUES (3, FALSE)")
+
+	r := exec(t, e, "SELECT * FROM t WHERE NOT active")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("id = %s, want 3", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_NotUpdate(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, active BOOLEAN)")
+	exec(t, e, "INSERT INTO t VALUES (1, TRUE)")
+	exec(t, e, "INSERT INTO t VALUES (2, FALSE)")
+
+	r := exec(t, e, "UPDATE t SET active = TRUE WHERE NOT active")
+	if r.Tag != "UPDATE 1" {
+		t.Errorf("tag = %q, want UPDATE 1", r.Tag)
+	}
+}
+
+func TestExecutor_NotDelete(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, active BOOLEAN)")
+	exec(t, e, "INSERT INTO t VALUES (1, TRUE)")
+	exec(t, e, "INSERT INTO t VALUES (2, FALSE)")
+	exec(t, e, "INSERT INTO t VALUES (3, FALSE)")
+
+	r := exec(t, e, "DELETE FROM t WHERE NOT active")
+	if r.Tag != "DELETE 2" {
+		t.Errorf("tag = %q, want DELETE 2", r.Tag)
+	}
+}
+
 func TestExecutor_IsNull_UpdateDelete(t *testing.T) {
 	e := setup(t)
 	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")

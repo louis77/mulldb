@@ -177,6 +177,11 @@ type IsNullExpr struct {
 	Not  bool // true for IS NOT NULL
 }
 
+// NotExpr represents NOT <expr>.
+type NotExpr struct {
+	Expr Expr
+}
+
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
@@ -187,3 +192,4 @@ func (*BinaryExpr) exprNode()        {}
 func (*FunctionCallExpr) exprNode()  {}
 func (*AliasExpr) exprNode()         {}
 func (*IsNullExpr) exprNode()        {}
+func (*NotExpr) exprNode()           {}

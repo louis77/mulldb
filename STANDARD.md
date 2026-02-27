@@ -77,7 +77,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | E061-11 | Subqueries in IN predicate | Open |
 | E061-12 | Subqueries in quantified comparison predicate | Open |
 | E061-13 | Correlated subqueries | Open |
-| E061-14 | Search condition (AND, OR) | **Done** |
+| E061-14 | Search condition (AND, OR, NOT) | **Done** |
 
 ## E071 — Basic query expressions
 

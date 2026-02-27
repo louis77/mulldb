@@ -1193,6 +1193,80 @@ func TestParse_BeginSemicolon(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// NOT operator
+// ---------------------------------------------------------------------------
+
+func TestParse_NotColumn(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE NOT active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	not, ok := sel.Where.(*NotExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *NotExpr", sel.Where)
+	}
+	assertColumnRef(t, not.Expr, "active")
+}
+
+func TestParse_NotParenthesized(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE NOT (x > 5)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	not, ok := sel.Where.(*NotExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *NotExpr", sel.Where)
+	}
+	bin, ok := not.Expr.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("NOT inner = %T, want *BinaryExpr", not.Expr)
+	}
+	if bin.Op != ">" {
+		t.Errorf("Op = %q, want >", bin.Op)
+	}
+}
+
+func TestParse_NotWithAnd(t *testing.T) {
+	// NOT binds tighter than AND: "NOT a AND b" → "(NOT a) AND b"
+	stmt, err := Parse("SELECT * FROM t WHERE NOT active AND x = 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *BinaryExpr (AND)", sel.Where)
+	}
+	if bin.Op != "AND" {
+		t.Fatalf("Op = %q, want AND", bin.Op)
+	}
+	not, ok := bin.Left.(*NotExpr)
+	if !ok {
+		t.Fatalf("Left = %T, want *NotExpr", bin.Left)
+	}
+	assertColumnRef(t, not.Expr, "active")
+}
+
+func TestParse_DoubleNot(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE NOT NOT active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	outer, ok := sel.Where.(*NotExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *NotExpr", sel.Where)
+	}
+	inner, ok := outer.Expr.(*NotExpr)
+	if !ok {
+		t.Fatalf("inner = %T, want *NotExpr", outer.Expr)
+	}
+	assertColumnRef(t, inner.Expr, "active")
+}
+
 func TestParse_IsNullWithAnd(t *testing.T) {
 	stmt, err := Parse("SELECT * FROM t WHERE a IS NULL AND b = 1")
 	if err != nil {

@@ -931,6 +931,19 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 		}
 		return func(r storage.Row) any { return inner(r) == nil }, nil
 
+	case *parser.NotExpr:
+		inner, err := compileExpr(e.Expr, def)
+		if err != nil {
+			return nil, err
+		}
+		return func(r storage.Row) any {
+			v, ok := inner(r).(bool)
+			if !ok {
+				return nil
+			}
+			return !v
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported expression type %T", expr)
 	}
