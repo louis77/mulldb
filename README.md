@@ -41,7 +41,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
-- **Scalar functions** — `VERSION()` and a registration pattern for adding more
+- **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `VERSION()`, and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
 - **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
@@ -395,29 +395,58 @@ SELECT 1 / 0;     -- ERROR: division by zero (SQLSTATE 22012)
 
 ### Scalar Functions
 
-Scalar functions can be called in a `SELECT` without a `FROM` clause. They take zero or more arguments and return a single value.
+Scalar functions return a single value per row. They can be used in `SELECT` columns (with or without `FROM`) and in `WHERE` clauses.
 
-| Function | Returns | Description |
-|----------|---------|-------------|
-| `VERSION()` | `TEXT` | PostgreSQL-compatible version string identifying the mulldb build |
+| Function | Arguments | Returns | Description |
+|----------|-----------|---------|-------------|
+| `LENGTH(text)` | 1 TEXT | `INTEGER` | Number of characters (Unicode code points, not bytes) |
+| `CHARACTER_LENGTH(text)` | 1 TEXT | `INTEGER` | SQL-standard alias for `LENGTH()` |
+| `CHAR_LENGTH(text)` | 1 TEXT | `INTEGER` | SQL-standard alias for `LENGTH()` |
+| `OCTET_LENGTH(text)` | 1 TEXT | `INTEGER` | Number of bytes (UTF-8 encoded length) |
+| `VERSION()` | 0 | `TEXT` | PostgreSQL-compatible version string identifying the mulldb build |
 
-Function names are case-insensitive.
+Function names are case-insensitive. NULL input returns NULL.
 
 **Examples:**
 
 ```sql
+SELECT LENGTH('hello');
+--  length
+-- --------
+--       5
+
+SELECT LENGTH('héllo');  -- counts characters, not bytes
+--  length
+-- --------
+--       5
+
+SELECT CHARACTER_LENGTH('hello');  -- SQL-standard name
+--  length
+-- --------
+--       5
+
+CREATE TABLE t (name TEXT);
+INSERT INTO t VALUES ('hi'), ('hello'), ('hey');
+
+SELECT name, LENGTH(name) FROM t;
+--  name  | length
+-- -------+--------
+--  hi    |      2
+--  hello |      5
+--  hey   |      3
+
+SELECT * FROM t WHERE LENGTH(name) > 3;
+--  name
+-- -------
+--  hello
+
 SELECT VERSION();
 --                           version
 -- ----------------------------------------------------------
 --  PostgreSQL 15.0 (mulldb dev, commit abc1234, built ...)
-
-SELECT 1, 'hello', TRUE, NULL;
---  ?column? | ?column? | ?column? | ?column?
--- ----------+----------+----------+----------
---         1 | hello    | t        |
 ```
 
-Calling an unknown function returns SQLSTATE `42883`. Calling a function with the wrong number of arguments also returns `42883`.
+Calling an unknown function returns SQLSTATE `42883`. Calling a function with the wrong number of arguments or wrong type also returns `42883`.
 
 ### Catalog Tables
 
@@ -678,6 +707,7 @@ mulldb/
 ├── executor/
 │   ├── executor.go         Query execution (AST → storage → results)
 │   ├── scalar.go           Scalar function registry and static SELECT evaluation
+│   ├── fn_length.go        LENGTH() / CHARACTER_LENGTH() / CHAR_LENGTH() (registers via init())
 │   ├── fn_version.go       VERSION() implementation (registers via init())
 │   ├── result.go           Result types, QueryError, SQLSTATE mapping
 │   └── executor_test.go

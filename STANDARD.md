@@ -30,8 +30,8 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | E021-01 | CHARACTER data type (fixed-length) | Open |
 | E021-02 | CHARACTER VARYING data type | **Done** (TEXT; UTF-8 encoded) |
 | E021-03 | Character literals | **Done** (single-quoted strings; full UTF-8 support) |
-| E021-04 | CHARACTER_LENGTH function | Open |
-| E021-05 | OCTET_LENGTH function | Open |
+| E021-04 | CHARACTER_LENGTH function | **Done** (`LENGTH()`, `CHARACTER_LENGTH()`, `CHAR_LENGTH()`; counts Unicode code points; NULL returns NULL) |
+| E021-05 | OCTET_LENGTH function | **Done** (`OCTET_LENGTH()`; returns byte length of UTF-8 string; NULL returns NULL) |
 | E021-06 | SUBSTRING function | Open |
 | E021-07 | Character concatenation (`\|\|`) | Open |
 | E021-08 | UPPER and LOWER functions | Open |
@@ -345,9 +345,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~36 |
+| **Done** | ~38 |
 | **Partial** | ~6 |
-| **Open** | ~135 |
+| **Open** | ~133 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)

@@ -247,13 +247,20 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 	}
 
 	// Detect aggregate vs non-aggregate columns.
+	isAggFunc := func(name string) bool {
+		switch name {
+		case "COUNT", "SUM", "MIN", "MAX":
+			return true
+		}
+		return false
+	}
 	hasAgg, hasNonAgg := false, false
 	for _, col := range s.Columns {
 		expr := col
 		if a, ok := expr.(*parser.AliasExpr); ok {
 			expr = a.Expr
 		}
-		if _, ok := expr.(*parser.FunctionCallExpr); ok {
+		if fn, ok := expr.(*parser.FunctionCallExpr); ok && isAggFunc(fn.Name) {
 			hasAgg = true
 		} else {
 			hasNonAgg = true
@@ -867,6 +874,23 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 				name = alias
 			}
 			cols = append(cols, Column{Name: name, TypeOID: OIDUnknown, TypeSize: -1})
+		case *parser.FunctionCallExpr:
+			compiled, err := compileExpr(e, def)
+			if err != nil {
+				return nil, nil, err
+			}
+			evals = append(evals, compiled)
+			// Get column metadata from the scalar function.
+			col := Column{Name: "?column?", TypeOID: OIDUnknown, TypeSize: -1}
+			if fn, ok := scalarRegistry[e.Name]; ok {
+				if _, meta, err := fn([]any{nil}); err == nil {
+					col = meta
+				}
+			}
+			if alias != "" {
+				col.Name = alias
+			}
+			cols = append(cols, col)
 		default:
 			compiled, err := compileExpr(inner, def)
 			if err != nil {
@@ -968,6 +992,31 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 				return nil
 			}
 			return !v
+		}, nil
+
+	case *parser.FunctionCallExpr:
+		fn, ok := scalarRegistry[e.Name]
+		if !ok {
+			return nil, fmt.Errorf("function %s() does not exist", strings.ToLower(e.Name))
+		}
+		argEvals := make([]exprFunc, len(e.Args))
+		for i, arg := range e.Args {
+			compiled, err := compileExpr(arg, def)
+			if err != nil {
+				return nil, err
+			}
+			argEvals[i] = compiled
+		}
+		return func(r storage.Row) any {
+			args := make([]any, len(argEvals))
+			for i, eval := range argEvals {
+				args[i] = eval(r)
+			}
+			val, _, err := fn(args)
+			if err != nil {
+				return nil
+			}
+			return val
 		}, nil
 
 	default:
