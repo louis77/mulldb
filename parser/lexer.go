@@ -68,6 +68,18 @@ func (l *Lexer) NextToken() Token {
 	case l.ch == '.':
 		l.advance()
 		return Token{Type: TokenDot, Literal: ".", Pos: start}
+	case l.ch == '+':
+		l.advance()
+		return Token{Type: TokenPlus, Literal: "+", Pos: start}
+	case l.ch == '-':
+		l.advance()
+		return Token{Type: TokenMinus, Literal: "-", Pos: start}
+	case l.ch == '/':
+		l.advance()
+		return Token{Type: TokenSlash, Literal: "/", Pos: start}
+	case l.ch == '%':
+		l.advance()
+		return Token{Type: TokenPercent, Literal: "%", Pos: start}
 	case l.ch == '=':
 		l.advance()
 		return Token{Type: TokenEq, Literal: "=", Pos: start}

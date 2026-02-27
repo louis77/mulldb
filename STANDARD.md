@@ -17,7 +17,7 @@ Legend: **Done** = implemented, **Partial** = partially implemented, **Open** = 
 | E011-01 | INTEGER and SMALLINT data types | **Done** (INTEGER, INT, SMALLINT, BIGINT all accepted; stored as int64) |
 | E011-02 | REAL, DOUBLE PRECISION, and FLOAT data types | Open |
 | E011-03 | DECIMAL and NUMERIC data types | Open |
-| E011-04 | Arithmetic operators | Open (no expressions in SELECT/WHERE yet) |
+| E011-04 | Arithmetic operators | **Done** (`+`, `-`, `*`, `/`, `%` on integers; unary minus; NULL propagation; division by zero → SQLSTATE 22012) |
 | E011-05 | Numeric comparison | **Done** |
 | E011-06 | Implicit casting among numeric data types | Open (only one numeric type exists) |
 
@@ -345,9 +345,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~34 |
+| **Done** | ~35 |
 | **Partial** | ~6 |
-| **Open** | ~137 |
+| **Open** | ~136 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
@@ -361,7 +361,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 ### Biggest gaps to close
 1. **Predicates**: BETWEEN, IN, LIKE
-2. **Expressions**: Arithmetic in SELECT/WHERE, CASE, CAST, COALESCE
+2. **Expressions**: CASE, CAST, COALESCE (arithmetic is done)
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: No multi-table queries yet
 5. **Transactions**: No BEGIN / COMMIT / ROLLBACK

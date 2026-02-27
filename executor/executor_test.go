@@ -1423,3 +1423,168 @@ func TestExecutor_IsNull_UpdateDelete(t *testing.T) {
 		t.Errorf("tag = %q, want DELETE 3", r.Tag)
 	}
 }
+
+// -------------------------------------------------------------------------
+// Arithmetic expressions
+// -------------------------------------------------------------------------
+
+func TestExecutor_ArithmeticStatic(t *testing.T) {
+	e := setup(t)
+
+	r := exec(t, e, "SELECT 1 + 2")
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("1+2 = %q, want 3", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT 2 + 3 * 4")
+	if string(r.Rows[0][0]) != "14" {
+		t.Errorf("2+3*4 = %q, want 14", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT 10 / 3")
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("10/3 = %q, want 3", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT 10 % 3")
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("10%%3 = %q, want 1", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT 5 - 3")
+	if string(r.Rows[0][0]) != "2" {
+		t.Errorf("5-3 = %q, want 2", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT -42")
+	if string(r.Rows[0][0]) != "-42" {
+		t.Errorf("-42 = %q, want -42", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_ArithmeticWithAlias(t *testing.T) {
+	e := setup(t)
+
+	r := exec(t, e, "SELECT 1 + 2 AS sum")
+	if r.Columns[0].Name != "sum" {
+		t.Errorf("column name = %q, want sum", r.Columns[0].Name)
+	}
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("1+2 = %q, want 3", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_ArithmeticFromTable(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (a INTEGER, b INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (10, 3)")
+
+	r := exec(t, e, "SELECT a + b FROM t")
+	if string(r.Rows[0][0]) != "13" {
+		t.Errorf("a+b = %q, want 13", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT a * b, a / b, a % b FROM t")
+	if string(r.Rows[0][0]) != "30" {
+		t.Errorf("a*b = %q, want 30", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "3" {
+		t.Errorf("a/b = %q, want 3", r.Rows[0][1])
+	}
+	if string(r.Rows[0][2]) != "1" {
+		t.Errorf("a%%b = %q, want 1", r.Rows[0][2])
+	}
+
+	r = exec(t, e, "SELECT a - b AS diff FROM t")
+	if string(r.Rows[0][0]) != "7" {
+		t.Errorf("a-b = %q, want 7", r.Rows[0][0])
+	}
+	if r.Columns[0].Name != "diff" {
+		t.Errorf("column name = %q, want diff", r.Columns[0].Name)
+	}
+}
+
+func TestExecutor_ArithmeticInWhere(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE orders (price INTEGER, qty INTEGER)")
+	exec(t, e, "INSERT INTO orders VALUES (10, 5)")
+	exec(t, e, "INSERT INTO orders VALUES (20, 3)")
+	exec(t, e, "INSERT INTO orders VALUES (5, 8)")
+
+	r := exec(t, e, "SELECT * FROM orders WHERE price * qty > 50")
+	if r.Tag != "SELECT 1" {
+		t.Errorf("tag = %q, want SELECT 1", r.Tag)
+	}
+}
+
+func TestExecutor_ArithmeticNullPropagation(t *testing.T) {
+	e := setup(t)
+
+	r := exec(t, e, "SELECT NULL + 1")
+	if r.Rows[0][0] != nil {
+		t.Errorf("NULL + 1 = %q, want NULL", string(r.Rows[0][0]))
+	}
+}
+
+func TestExecutor_DivisionByZero(t *testing.T) {
+	e := setup(t)
+
+	_, err := e.Execute("SELECT 1 / 0")
+	if err == nil {
+		t.Fatal("expected division by zero error")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) || qe.Code != "22012" {
+		t.Errorf("error = %v, want QueryError with code 22012", err)
+	}
+}
+
+func TestExecutor_ModuloByZero(t *testing.T) {
+	e := setup(t)
+
+	_, err := e.Execute("SELECT 1 % 0")
+	if err == nil {
+		t.Fatal("expected division by zero error")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) || qe.Code != "22012" {
+		t.Errorf("error = %v, want QueryError with code 22012", err)
+	}
+}
+
+func TestExecutor_UnaryMinusInWhere(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (x INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (5)")
+	exec(t, e, "INSERT INTO t VALUES (-3)")
+
+	r := exec(t, e, "SELECT * FROM t WHERE x = -3")
+	if r.Tag != "SELECT 1" {
+		t.Errorf("tag = %q, want SELECT 1", r.Tag)
+	}
+	if string(r.Rows[0][0]) != "-3" {
+		t.Errorf("x = %q, want -3", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_InsertWithArithmetic(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (x INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1 + 2)")
+
+	r := exec(t, e, "SELECT * FROM t")
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("x = %q, want 3", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_UnaryMinusSelect(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (x INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (42)")
+
+	r := exec(t, e, "SELECT -x FROM t")
+	if string(r.Rows[0][0]) != "-42" {
+		t.Errorf("-x = %q, want -42", r.Rows[0][0])
+	}
+}

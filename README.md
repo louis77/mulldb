@@ -17,6 +17,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
   - [Column Aliases (AS)](#column-aliases-as)
   - [ORDER BY](#order-by)
   - [LIMIT and OFFSET](#limit-and-offset)
+  - [Arithmetic Expressions](#arithmetic-expressions)
   - [Scalar Functions](#scalar-functions)
   - [Catalog Tables](#catalog-tables)
   - [Statement Tracing](#statement-tracing)
@@ -41,7 +42,8 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Scalar functions** — `VERSION()` and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
-- **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
+- **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
+- **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
 - **Full UTF-8 support** — identifiers, string literals, and all data are UTF-8 throughout; no other character encoding exists
 - **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`), Unicode identifiers (`"café"`, `"名前"`)
 - **WAL migration** — versioned WAL format with opt-in `--migrate` flag and backup preservation
@@ -145,6 +147,12 @@ SELECT * FROM <table> ORDER BY <col> LIMIT <n>;       -- sorted + limited
 SELECT * FROM <table> LIMIT <n>;             -- return at most n rows
 SELECT * FROM <table> OFFSET <n>;            -- skip first n rows
 SELECT * FROM <table> LIMIT <n> OFFSET <m>;  -- pagination
+
+-- Arithmetic expressions
+SELECT 1 + 2;
+SELECT col * 2 + 1 FROM <table>;
+SELECT * FROM <table> WHERE price * qty > 100;
+INSERT INTO <table> VALUES (1 + 2, -5);
 
 -- Static SELECT (no table required)
 SELECT 1;
@@ -334,6 +342,55 @@ SELECT * FROM items WHERE id > 1 LIMIT 2;
 -- LIMIT applies after WHERE filtering
 ```
 
+### Arithmetic Expressions
+
+Integer arithmetic operators `+`, `-`, `*`, `/`, `%` (modulo) and unary minus are supported in SELECT columns, WHERE conditions, INSERT VALUES, and UPDATE SET clauses. All arithmetic is integer-only (64-bit signed). Division and modulo by zero return SQLSTATE `22012`.
+
+Operator precedence follows standard math rules: unary minus binds tightest, then `*` / `/` / `%`, then `+` / `-`, then comparisons, then logical operators.
+
+NULL propagation: any arithmetic with a NULL operand yields NULL.
+
+**Examples:**
+
+```sql
+SELECT 1 + 2;
+--  ?column?
+-- ----------
+--         3
+
+SELECT 2 + 3 * 4;
+--  ?column?
+-- ----------
+--        14
+
+SELECT -42;
+--  ?column?
+-- ----------
+--       -42
+
+CREATE TABLE items (price INTEGER, qty INTEGER);
+INSERT INTO items VALUES (10, 5), (20, 3);
+
+SELECT price * qty AS total FROM items;
+--  total
+-- -------
+--     50
+--     60
+
+SELECT * FROM items WHERE price * qty > 50;
+--  price | qty
+-- -------+-----
+--     20 |   3
+
+INSERT INTO items VALUES (1 + 2, 10);
+-- Inserts (3, 10)
+
+SELECT 10 / 3;   -- integer division → 3
+SELECT 10 % 3;   -- modulo → 1
+SELECT NULL + 1;  -- NULL (null propagation)
+SELECT 1 / 0;     -- ERROR: division by zero (SQLSTATE 22012)
+```
+
 ### Scalar Functions
 
 Scalar functions can be called in a `SELECT` without a `FROM` clause. They take zero or more arguments and return a single value.
@@ -424,6 +481,8 @@ SHOW TRACE;
 ### WHERE Expressions
 
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%` (integer only)
+- **Unary minus**: `-expr`
 - **NULL predicates**: `IS NULL`, `IS NOT NULL`
 - **Logical operators**: `AND`, `OR`, `NOT`
 - **Parentheses**: `(expr)` for grouping
@@ -441,7 +500,7 @@ SELECT * FROM t WHERE NOT (x > 5);        -- negate a comparison
 
 `NOT` on a NULL value yields NULL (the row is excluded). `NOT` can be chained: `NOT NOT active`.
 
-Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / IS [NOT] NULL → primary.
+Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / IS [NOT] NULL → `+` `-` → `*` `/` `%` → unary `-` → primary.
 
 ## Architecture
 
@@ -635,9 +694,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
+- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 
@@ -654,6 +713,7 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 | `42803` | Grouping error | Mixing aggregate and non-aggregate columns |
 | `42809` | Wrong object type | `INSERT INTO pg_type ...` (catalog is read-only) |
 | `42883` | Undefined function | Unknown aggregate function or type mismatch |
+| `22012` | Division by zero | `SELECT 1 / 0` |
 | `0A000` | Feature not supported | ORDER BY with aggregates (no GROUP BY) |
 
 ## Limitations
@@ -667,7 +727,7 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
 - **ALTER TABLE**
-- **Expressions in SELECT** — arithmetic like `1 + 2` is not supported; literals and scalar functions work both with and without `FROM`
+- **Float/decimal arithmetic** — arithmetic is integer-only; no floating-point or decimal types
 - **Subqueries**
 - **Extended query protocol** — only SimpleQuery flow
 - **TLS/SSL** — connections are unencrypted (SSL negotiation is refused)

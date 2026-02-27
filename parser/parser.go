@@ -493,7 +493,7 @@ func (p *parser) parseNot() (Expr, error) {
 }
 
 func (p *parser) parseComparison() (Expr, error) {
-	left, err := p.parsePrimary()
+	left, err := p.parseAdditive()
 	if err != nil {
 		return nil, err
 	}
@@ -530,11 +530,68 @@ func (p *parser) parseComparison() (Expr, error) {
 	}
 
 	p.next()
-	right, err := p.parsePrimary()
+	right, err := p.parseAdditive()
 	if err != nil {
 		return nil, err
 	}
 	return &BinaryExpr{Left: left, Op: op, Right: right}, nil
+}
+
+func (p *parser) parseAdditive() (Expr, error) {
+	left, err := p.parseMultiplicative()
+	if err != nil {
+		return nil, err
+	}
+	for p.cur.Type == TokenPlus || p.cur.Type == TokenMinus {
+		op := "+"
+		if p.cur.Type == TokenMinus {
+			op = "-"
+		}
+		p.next()
+		right, err := p.parseMultiplicative()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Left: left, Op: op, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseMultiplicative() (Expr, error) {
+	left, err := p.parseUnary()
+	if err != nil {
+		return nil, err
+	}
+	for p.cur.Type == TokenStar || p.cur.Type == TokenSlash || p.cur.Type == TokenPercent {
+		var op string
+		switch p.cur.Type {
+		case TokenStar:
+			op = "*"
+		case TokenSlash:
+			op = "/"
+		case TokenPercent:
+			op = "%"
+		}
+		p.next()
+		right, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Left: left, Op: op, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseUnary() (Expr, error) {
+	if p.cur.Type == TokenMinus {
+		p.next()
+		expr, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &UnaryExpr{Op: "-", Expr: expr}, nil
+	}
+	return p.parsePrimary()
 }
 
 func (p *parser) parsePrimary() (Expr, error) {

@@ -151,8 +151,14 @@ type BoolLit struct {
 // NullLit represents the NULL literal.
 type NullLit struct{}
 
+// UnaryExpr is a unary operation (e.g. -expr).
+type UnaryExpr struct {
+	Op   string // "-"
+	Expr Expr
+}
+
 // BinaryExpr is a binary operation: left op right.
-// Op is one of: "=", "!=", "<", ">", "<=", ">=", "AND", "OR".
+// Op is one of: "=", "!=", "<", ">", "<=", ">=", "AND", "OR", "+", "-", "*", "/", "%".
 type BinaryExpr struct {
 	Left  Expr
 	Op    string
@@ -188,6 +194,7 @@ func (*IntegerLit) exprNode()        {}
 func (*StringLit) exprNode()         {}
 func (*BoolLit) exprNode()           {}
 func (*NullLit) exprNode()           {}
+func (*UnaryExpr) exprNode()         {}
 func (*BinaryExpr) exprNode()        {}
 func (*FunctionCallExpr) exprNode()  {}
 func (*AliasExpr) exprNode()         {}

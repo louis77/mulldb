@@ -1289,3 +1289,129 @@ func TestParse_IsNullWithAnd(t *testing.T) {
 		t.Error("Not = true, want false")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Arithmetic tokens
+// ---------------------------------------------------------------------------
+
+func TestLexer_ArithmeticTokens(t *testing.T) {
+	input := "+ - / %"
+	want := []TokenType{TokenPlus, TokenMinus, TokenSlash, TokenPercent, TokenEOF}
+	lex := NewLexer(input)
+	for i, w := range want {
+		tok := lex.NextToken()
+		if tok.Type != w {
+			t.Fatalf("token[%d]: type = %s, want %s", i, tok.Type, w)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Arithmetic expressions
+// ---------------------------------------------------------------------------
+
+func TestParse_ArithmeticPrecedence(t *testing.T) {
+	// 1 + 2 * 3 should parse as 1 + (2 * 3)
+	stmt, err := Parse("SELECT 1 + 2 * 3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	add := sel.Columns[0].(*BinaryExpr)
+	if add.Op != "+" {
+		t.Fatalf("top op = %q, want +", add.Op)
+	}
+	assertIntLit(t, add.Left, 1)
+	mul := add.Right.(*BinaryExpr)
+	if mul.Op != "*" {
+		t.Fatalf("right op = %q, want *", mul.Op)
+	}
+	assertIntLit(t, mul.Left, 2)
+	assertIntLit(t, mul.Right, 3)
+}
+
+func TestParse_UnaryMinus(t *testing.T) {
+	stmt, err := Parse("SELECT -5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	u, ok := sel.Columns[0].(*UnaryExpr)
+	if !ok {
+		t.Fatalf("got %T, want *UnaryExpr", sel.Columns[0])
+	}
+	if u.Op != "-" {
+		t.Errorf("op = %q, want -", u.Op)
+	}
+	assertIntLit(t, u.Expr, 5)
+}
+
+func TestParse_UnaryMinusColumn(t *testing.T) {
+	stmt, err := Parse("SELECT -col FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	u, ok := sel.Columns[0].(*UnaryExpr)
+	if !ok {
+		t.Fatalf("got %T, want *UnaryExpr", sel.Columns[0])
+	}
+	assertColumnRef(t, u.Expr, "col")
+}
+
+func TestParse_UnaryMinusParenthesized(t *testing.T) {
+	stmt, err := Parse("SELECT -(1 + 2)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	u, ok := sel.Columns[0].(*UnaryExpr)
+	if !ok {
+		t.Fatalf("got %T, want *UnaryExpr", sel.Columns[0])
+	}
+	bin := u.Expr.(*BinaryExpr)
+	if bin.Op != "+" {
+		t.Errorf("inner op = %q, want +", bin.Op)
+	}
+}
+
+func TestParse_ArithmeticWithComparison(t *testing.T) {
+	// a + 1 > b * 2
+	stmt, err := Parse("SELECT * FROM t WHERE a + 1 > b * 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	gt := sel.Where.(*BinaryExpr)
+	if gt.Op != ">" {
+		t.Fatalf("top op = %q, want >", gt.Op)
+	}
+	add := gt.Left.(*BinaryExpr)
+	if add.Op != "+" {
+		t.Fatalf("left op = %q, want +", add.Op)
+	}
+	mul := gt.Right.(*BinaryExpr)
+	if mul.Op != "*" {
+		t.Fatalf("right op = %q, want *", mul.Op)
+	}
+}
+
+func TestParse_ArithmeticLeftAssociative(t *testing.T) {
+	// 1 - 2 - 3 should parse as (1 - 2) - 3
+	stmt, err := Parse("SELECT 1 - 2 - 3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	outer := sel.Columns[0].(*BinaryExpr)
+	if outer.Op != "-" {
+		t.Fatalf("top op = %q, want -", outer.Op)
+	}
+	assertIntLit(t, outer.Right, 3)
+	inner := outer.Left.(*BinaryExpr)
+	if inner.Op != "-" {
+		t.Fatalf("left op = %q, want -", inner.Op)
+	}
+	assertIntLit(t, inner.Left, 1)
+	assertIntLit(t, inner.Right, 2)
+}

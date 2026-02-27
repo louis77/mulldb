@@ -30,6 +30,10 @@ const (
 	TokenSemicolon // ;
 	TokenStar      // *
 	TokenDot       // .
+	TokenPlus      // +
+	TokenMinus     // -
+	TokenSlash     // /
+	TokenPercent   // %
 
 	// Keywords.
 	TokenSelect
@@ -86,6 +90,10 @@ var tokenNames = map[TokenType]string{
 	TokenSemicolon: ";",
 	TokenStar:      "*",
 	TokenDot:       ".",
+	TokenPlus:      "+",
+	TokenMinus:     "-",
+	TokenSlash:     "/",
+	TokenPercent:   "%",
 	TokenSelect:    "SELECT",
 	TokenFrom:      "FROM",
 	TokenWhere:     "WHERE",

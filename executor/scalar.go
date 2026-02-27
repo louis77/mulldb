@@ -32,6 +32,10 @@ func evalStaticExpr(expr parser.Expr) (any, Column, error) {
 		return nil, Column{Name: "?column?", TypeOID: OIDUnknown, TypeSize: -1}, nil
 	case *parser.FunctionCallExpr:
 		return evalScalarFunction(e)
+	case *parser.BinaryExpr:
+		return evalStaticBinaryExpr(e)
+	case *parser.UnaryExpr:
+		return evalStaticUnaryExpr(e)
 	default:
 		return nil, Column{}, &QueryError{
 			Code:    "42601",
@@ -61,4 +65,69 @@ func evalScalarFunction(e *parser.FunctionCallExpr) (any, Column, error) {
 	}
 
 	return fn(args)
+}
+
+func evalStaticBinaryExpr(e *parser.BinaryExpr) (any, Column, error) {
+	lv, _, err := evalStaticExpr(e.Left)
+	if err != nil {
+		return nil, Column{}, err
+	}
+	rv, _, err := evalStaticExpr(e.Right)
+	if err != nil {
+		return nil, Column{}, err
+	}
+	col := Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}
+	if lv == nil || rv == nil {
+		return nil, col, nil
+	}
+	li, lok := lv.(int64)
+	ri, rok := rv.(int64)
+	if !lok || !rok {
+		return nil, Column{}, &QueryError{
+			Code:    "42883",
+			Message: fmt.Sprintf("operator %s is not defined for the given types", e.Op),
+		}
+	}
+	switch e.Op {
+	case "+":
+		return li + ri, col, nil
+	case "-":
+		return li - ri, col, nil
+	case "*":
+		return li * ri, col, nil
+	case "/":
+		if ri == 0 {
+			return nil, Column{}, &QueryError{Code: "22012", Message: "division by zero"}
+		}
+		return li / ri, col, nil
+	case "%":
+		if ri == 0 {
+			return nil, Column{}, &QueryError{Code: "22012", Message: "division by zero"}
+		}
+		return li % ri, col, nil
+	default:
+		return nil, Column{}, &QueryError{
+			Code:    "42601",
+			Message: fmt.Sprintf("operator %q not supported in static context", e.Op),
+		}
+	}
+}
+
+func evalStaticUnaryExpr(e *parser.UnaryExpr) (any, Column, error) {
+	v, _, err := evalStaticExpr(e.Expr)
+	if err != nil {
+		return nil, Column{}, err
+	}
+	col := Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}
+	if v == nil {
+		return nil, col, nil
+	}
+	iv, ok := v.(int64)
+	if !ok {
+		return nil, Column{}, &QueryError{
+			Code:    "42883",
+			Message: "unary minus is not defined for the given type",
+		}
+	}
+	return -iv, col, nil
 }

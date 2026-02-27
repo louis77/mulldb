@@ -88,12 +88,14 @@ Double-quoted identifiers (`"select"`, `"My Column"`) get special treatment. The
 Expressions are parsed with precedence climbing via function nesting. Each precedence level is a function that calls the next-tighter level:
 
 ```
-parseExpr → parseOr → parseAnd → parseComparison → parsePrimary
+parseExpr → parseOr → parseAnd → parseNot → parseComparison → parseAdditive → parseMultiplicative → parseUnary → parsePrimary
 ```
+
+Arithmetic operators follow standard mathematical precedence: `parseAdditive` handles `+` and `-` (lowest arithmetic precedence), `parseMultiplicative` handles `*`, `/`, and `%` (higher precedence), and `parseUnary` handles unary minus (highest arithmetic precedence). All arithmetic levels sit between `parseComparison` and `parsePrimary`, so `a + 1 > b * 2` parses as `(a + 1) > (b * 2)`.
 
 `parsePrimary` handles atoms: integer literals, string literals, booleans, NULL, column references, parenthesized sub-expressions, and function calls. Function call detection is done by lookahead — after reading an identifier, if the next token is `(`, it's a function call.
 
-This approach naturally handles left-associativity (`a AND b AND c` becomes `AND(AND(a, b), c)`) and is straightforward to extend with new precedence levels.
+This approach naturally handles left-associativity (`a AND b AND c` becomes `AND(AND(a, b), c)`, `1 - 2 - 3` becomes `(1 - 2) - 3`) and is straightforward to extend with new precedence levels.
 
 ### AST Design
 
@@ -250,7 +252,9 @@ For example, `WHERE id > 5 AND name = 'Alice'` compiles into a closure that:
 
 This is faster than re-walking the AST for every row, which matters when scanning large tables.
 
-**NULL semantics.** Comparison operators (`=`, `!=`, `<`, `>`, `<=`, `>=`) return `nil` (SQL NULL) when either operand is NULL, following the SQL standard. The `buildFilter()` function already treats `nil` as row-rejection (`ok && b` where `ok` is false for non-bool values), so NULL-yielding comparisons correctly exclude rows without special handling. `IS NULL` and `IS NOT NULL` are compiled as simple nil-checks on the inner expression's result.
+**Arithmetic expressions.** Arithmetic operators (`+`, `-`, `*`, `/`, `%`) are compiled into closures alongside comparison and logical operators. Both operands are evaluated and type-checked as `int64`. NULL propagation follows the SQL standard — if either operand is NULL, the result is NULL. Division and modulo by zero return a `QueryError` with SQLSTATE `22012`. Unary minus negates an `int64` value (NULL passes through as NULL). The same arithmetic logic is shared between row-context evaluation (`compileExpr`) and static evaluation (`evalStaticExpr` in `scalar.go`), ensuring consistent behavior in `SELECT 1 + 2` (no FROM) and `SELECT a + b FROM t` (with FROM).
+
+**NULL semantics.** Comparison operators (`=`, `!=`, `<`, `>`, `<=`, `>=`) and arithmetic operators return `nil` (SQL NULL) when either operand is NULL, following the SQL standard. The `buildFilter()` function already treats `nil` as row-rejection (`ok && b` where `ok` is false for non-bool values), so NULL-yielding comparisons correctly exclude rows without special handling. `IS NULL` and `IS NOT NULL` are compiled as simple nil-checks on the inner expression's result.
 
 ### Aggregate Functions
 

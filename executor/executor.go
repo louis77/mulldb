@@ -868,7 +868,16 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 			}
 			cols = append(cols, Column{Name: name, TypeOID: OIDUnknown, TypeSize: -1})
 		default:
-			return nil, nil, fmt.Errorf("unsupported select expression %T", inner)
+			compiled, err := compileExpr(inner, def)
+			if err != nil {
+				return nil, nil, err
+			}
+			evals = append(evals, compiled)
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: OIDInt8, TypeSize: 8})
 		}
 	}
 	return evals, cols, nil
@@ -930,6 +939,23 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 			return func(r storage.Row) any { return inner(r) != nil }, nil
 		}
 		return func(r storage.Row) any { return inner(r) == nil }, nil
+
+	case *parser.UnaryExpr:
+		inner, err := compileExpr(e.Expr, def)
+		if err != nil {
+			return nil, err
+		}
+		return func(r storage.Row) any {
+			v := inner(r)
+			if v == nil {
+				return nil
+			}
+			iv, ok := v.(int64)
+			if !ok {
+				return nil
+			}
+			return -iv
+		}, nil
 
 	case *parser.NotExpr:
 		inner, err := compileExpr(e.Expr, def)
@@ -1026,6 +1052,39 @@ func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, e
 			}
 			return c >= 0
 		}, nil
+	case "+", "-", "*", "/", "%":
+		op := e.Op
+		return func(r storage.Row) any {
+			lv, rv := left(r), right(r)
+			if lv == nil || rv == nil {
+				return nil
+			}
+			li, lok := lv.(int64)
+			ri, rok := rv.(int64)
+			if !lok || !rok {
+				return nil
+			}
+			switch op {
+			case "+":
+				return li + ri
+			case "-":
+				return li - ri
+			case "*":
+				return li * ri
+			case "/":
+				if ri == 0 {
+					return nil // division by zero handled at query level
+				}
+				return li / ri
+			case "%":
+				if ri == 0 {
+					return nil
+				}
+				return li % ri
+			}
+			return nil
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported operator %q", e.Op)
 	}
@@ -1113,6 +1172,12 @@ func evalLiteral(expr parser.Expr) (any, error) {
 		return e.Value, nil
 	case *parser.NullLit:
 		return nil, nil
+	case *parser.BinaryExpr:
+		val, _, err := evalStaticExpr(e)
+		return val, err
+	case *parser.UnaryExpr:
+		val, _, err := evalStaticExpr(e)
+		return val, err
 	default:
 		return nil, fmt.Errorf("expected literal value, got %T", expr)
 	}
