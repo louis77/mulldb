@@ -706,6 +706,355 @@ func TestEngine_PrimaryKey_TextKey(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// Split WAL — file layout and migration
+// -------------------------------------------------------------------------
+
+func TestEngine_SplitWAL_FileLayout(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+
+	eng.CreateTable("users", testColumns)
+	eng.CreateTable("orders", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+		{Name: "total", DataType: TypeInteger},
+	})
+	eng.Insert("users", nil, [][]any{{int64(1), "alice", true}})
+	eng.Insert("orders", nil, [][]any{{int64(1), int64(100)}})
+	eng.Close()
+
+	// Verify file layout.
+	if !fileExists(filepath.Join(dir, "catalog.wal")) {
+		t.Error("catalog.wal not found")
+	}
+	if !fileExists(filepath.Join(dir, "tables", "users.wal")) {
+		t.Error("tables/users.wal not found")
+	}
+	if !fileExists(filepath.Join(dir, "tables", "orders.wal")) {
+		t.Error("tables/orders.wal not found")
+	}
+	// Legacy wal.dat should NOT exist for a fresh database.
+	if fileExists(filepath.Join(dir, "wal.dat")) {
+		t.Error("wal.dat should not exist for a fresh database")
+	}
+}
+
+func TestEngine_SplitWAL_DropRemovesFile(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+
+	eng.CreateTable("temp", testColumns)
+	eng.Insert("temp", nil, [][]any{{int64(1), "x", false}})
+
+	walPath := filepath.Join(dir, "tables", "temp.wal")
+	if !fileExists(walPath) {
+		t.Fatal("table WAL file should exist before drop")
+	}
+
+	eng.DropTable("temp")
+
+	if fileExists(walPath) {
+		t.Error("table WAL file should be deleted after drop")
+	}
+
+	eng.Close()
+}
+
+func TestEngine_SplitWAL_Migration(t *testing.T) {
+	dir := tempDir(t)
+	os.MkdirAll(dir, 0755)
+
+	// Create a v2 single-WAL file manually (simulates legacy data).
+	walPath := filepath.Join(dir, "wal.dat")
+	w, err := OpenWAL(walPath, false)
+	if err != nil {
+		t.Fatalf("create legacy WAL: %v", err)
+	}
+	cols := []ColumnDef{
+		{Name: "id", DataType: TypeInteger, PrimaryKey: true},
+		{Name: "name", DataType: TypeText},
+	}
+	w.WriteCreateTable("users", cols)
+	w.WriteInsert("users", 1, []any{int64(1), "alice"})
+	w.WriteInsert("users", 2, []any{int64(2), "bob"})
+
+	// Also create+drop a table to test that dropped tables are pruned.
+	w.WriteCreateTable("temp", []ColumnDef{{Name: "x", DataType: TypeInteger}})
+	w.WriteInsert("temp", 1, []any{int64(42)})
+	w.WriteDropTable("temp")
+	w.Close()
+
+	// Open with migrate=true.
+	eng, err := Open(dir, true)
+	if err != nil {
+		t.Fatalf("Open with migration: %v", err)
+	}
+
+	// Verify users survived.
+	def, ok := eng.GetTable("users")
+	if !ok {
+		t.Fatal("users table not found after migration")
+	}
+	if len(def.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(def.Columns))
+	}
+	if !def.Columns[0].PrimaryKey {
+		t.Error("PK flag lost during migration")
+	}
+
+	rows := collectRows(t, must(eng.Scan("users")))
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+
+	// Verify temp table was dropped.
+	if _, ok := eng.GetTable("temp"); ok {
+		t.Error("dropped table 'temp' should not exist after migration")
+	}
+
+	// Verify no WAL file exists for the dropped table.
+	if fileExists(filepath.Join(dir, "tables", "temp.wal")) {
+		t.Error("temp.wal should not exist after migration (table was dropped)")
+	}
+
+	// Verify backup exists.
+	if !fileExists(filepath.Join(dir, "wal.dat.bak")) {
+		t.Error("wal.dat.bak should exist after migration")
+	}
+
+	eng.Close()
+
+	// Reopen without --migrate to verify the split format works.
+	eng2, err := Open(dir, false)
+	if err != nil {
+		t.Fatalf("reopen after migration: %v", err)
+	}
+	defer eng2.Close()
+
+	rows2 := collectRows(t, must(eng2.Scan("users")))
+	if len(rows2) != 2 {
+		t.Fatalf("rows after reopen = %d, want 2", len(rows2))
+	}
+}
+
+func TestEngine_SplitWAL_RestartWithMultipleTables(t *testing.T) {
+	dir := tempDir(t)
+
+	eng := openEngine(t, dir)
+	eng.CreateTable("t1", []ColumnDef{{Name: "v", DataType: TypeInteger}})
+	eng.CreateTable("t2", []ColumnDef{{Name: "v", DataType: TypeText}})
+	eng.Insert("t1", nil, [][]any{{int64(1)}, {int64(2)}})
+	eng.Insert("t2", nil, [][]any{{"a"}, {"b"}, {"c"}})
+	eng.Close()
+
+	eng2 := openEngine(t, dir)
+	defer eng2.Close()
+
+	rows1 := collectRows(t, must(eng2.Scan("t1")))
+	if len(rows1) != 2 {
+		t.Errorf("t1 rows = %d, want 2", len(rows1))
+	}
+	rows2 := collectRows(t, must(eng2.Scan("t2")))
+	if len(rows2) != 3 {
+		t.Errorf("t2 rows = %d, want 3", len(rows2))
+	}
+}
+
+func TestEngine_SplitWAL_SpecialCharTableNames(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+
+	// Table names with special characters.
+	eng.CreateTable("my table", []ColumnDef{{Name: "v", DataType: TypeInteger}})
+	eng.Insert("my table", nil, [][]any{{int64(1)}})
+	eng.Close()
+
+	// Verify the WAL file has percent-encoded name.
+	if !fileExists(filepath.Join(dir, "tables", "my%20table.wal")) {
+		t.Error("expected percent-encoded WAL filename")
+	}
+
+	// Reopen and verify data.
+	eng2 := openEngine(t, dir)
+	defer eng2.Close()
+
+	rows := collectRows(t, must(eng2.Scan("my table")))
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].Values[0] != int64(1) {
+		t.Errorf("value = %v, want 1", rows[0].Values[0])
+	}
+}
+
+func TestEngine_SplitWAL_OrphanCleanup(t *testing.T) {
+	dir := tempDir(t)
+
+	// Create a normal database.
+	eng := openEngine(t, dir)
+	eng.CreateTable("keep", []ColumnDef{{Name: "v", DataType: TypeInteger}})
+	eng.Close()
+
+	// Simulate an orphan WAL file (table was dropped but file lingers).
+	tablesDir := filepath.Join(dir, "tables")
+	orphanPath := filepath.Join(tablesDir, "orphan.wal")
+	orphanFile, err := os.Create(orphanPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWALHeader(orphanFile)
+	orphanFile.Close()
+
+	if !fileExists(orphanPath) {
+		t.Fatal("orphan file should exist before reopen")
+	}
+
+	// Reopen — orphan should be cleaned up.
+	eng2 := openEngine(t, dir)
+	defer eng2.Close()
+
+	if fileExists(orphanPath) {
+		t.Error("orphan WAL file should be deleted on startup")
+	}
+
+	// Keep table should still work.
+	if _, ok := eng2.GetTable("keep"); !ok {
+		t.Error("'keep' table should still exist")
+	}
+}
+
+func TestEngine_SplitWAL_ConcurrentDifferentTables(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t1", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+		{Name: "val", DataType: TypeText},
+	})
+	eng.CreateTable("t2", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+		{Name: "val", DataType: TypeText},
+	})
+
+	const ops = 100
+	errs := make(chan error, 4)
+	var wg sync.WaitGroup
+
+	// Writer to t1.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < ops; i++ {
+			_, err := eng.Insert("t1", nil, [][]any{
+				{int64(i), fmt.Sprintf("t1-%d", i)},
+			})
+			if err != nil {
+				errs <- fmt.Errorf("t1 insert %d: %w", i, err)
+				return
+			}
+		}
+	}()
+
+	// Writer to t2.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < ops; i++ {
+			_, err := eng.Insert("t2", nil, [][]any{
+				{int64(i), fmt.Sprintf("t2-%d", i)},
+			})
+			if err != nil {
+				errs <- fmt.Errorf("t2 insert %d: %w", i, err)
+				return
+			}
+		}
+	}()
+
+	// Reader of t1.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < ops; i++ {
+			it, err := eng.Scan("t1")
+			if err != nil {
+				errs <- fmt.Errorf("t1 scan %d: %w", i, err)
+				return
+			}
+			for {
+				if _, ok := it.Next(); !ok {
+					break
+				}
+			}
+			it.Close()
+		}
+	}()
+
+	// Reader of t2.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < ops; i++ {
+			it, err := eng.Scan("t2")
+			if err != nil {
+				errs <- fmt.Errorf("t2 scan %d: %w", i, err)
+				return
+			}
+			for {
+				if _, ok := it.Next(); !ok {
+					break
+				}
+			}
+			it.Close()
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+
+	// Verify final counts.
+	rows1 := collectRows(t, must(eng.Scan("t1")))
+	if len(rows1) != ops {
+		t.Errorf("t1 rows = %d, want %d", len(rows1), ops)
+	}
+	rows2 := collectRows(t, must(eng.Scan("t2")))
+	if len(rows2) != ops {
+		t.Errorf("t2 rows = %d, want %d", len(rows2), ops)
+	}
+}
+
+func TestEngine_SplitWAL_DropWhileOtherTableActive(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("keep", []ColumnDef{{Name: "v", DataType: TypeInteger}})
+	eng.CreateTable("drop_me", []ColumnDef{{Name: "v", DataType: TypeInteger}})
+	eng.Insert("keep", nil, [][]any{{int64(1)}})
+	eng.Insert("drop_me", nil, [][]any{{int64(2)}})
+
+	// Drop one table.
+	if err := eng.DropTable("drop_me"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The other table should still work fine.
+	rows := collectRows(t, must(eng.Scan("keep")))
+	if len(rows) != 1 {
+		t.Errorf("keep rows = %d, want 1", len(rows))
+	}
+
+	// DML on dropped table should fail.
+	_, err := eng.Scan("drop_me")
+	if err == nil {
+		t.Error("scan on dropped table should fail")
+	}
+}
+
+// -------------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------------
 

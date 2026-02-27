@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -263,4 +264,134 @@ func migrateV1ToV2(op byte, payload []byte) (byte, []byte, error) {
 	}
 
 	return op, buf, nil
+}
+
+// -------------------------------------------------------------------------
+// Single-WAL → Split-WAL migration
+// -------------------------------------------------------------------------
+
+// migrateToSplitWAL reads the legacy single wal.dat, classifies entries
+// as DDL or DML, and writes them to separate files:
+//   - catalog.wal  — CreateTable / DropTable entries only
+//   - tables/<name>.wal — DML entries per surviving table
+//
+// The original wal.dat is backed up to wal.dat.bak.
+func migrateToSplitWAL(dataDir string) error {
+	legacyPath := filepath.Join(dataDir, legacyWALName)
+
+	if err := checkMigrationDiskSpace(legacyPath); err != nil {
+		return err
+	}
+
+	// Read all entries from the legacy WAL.
+	old, err := os.Open(legacyPath)
+	if err != nil {
+		return err
+	}
+	entries, err := readRawEntries(old, true) // v2 has header
+	old.Close()
+	if err != nil {
+		return fmt.Errorf("read legacy WAL: %w", err)
+	}
+
+	// Classify entries. Track which tables are alive after all DDL.
+	var ddlEntries []rawEntry
+	// tableName → list of DML entries for that table
+	dmlByTable := make(map[string][]rawEntry)
+	// Track alive tables to know which DML to keep.
+	alive := make(map[string]bool)
+
+	for _, e := range entries {
+		switch e.Op {
+		case opCreateTable:
+			ddlEntries = append(ddlEntries, e)
+			name, _, err := decodeString(e.Payload)
+			if err != nil {
+				return fmt.Errorf("decode CREATE TABLE name: %w", err)
+			}
+			alive[name] = true
+
+		case opDropTable:
+			ddlEntries = append(ddlEntries, e)
+			name, _, err := decodeString(e.Payload)
+			if err != nil {
+				return fmt.Errorf("decode DROP TABLE name: %w", err)
+			}
+			delete(alive, name)
+			delete(dmlByTable, name) // discard DML for dropped tables
+
+		case opInsert, opDelete, opUpdate:
+			name, _, err := decodeString(e.Payload)
+			if err != nil {
+				return fmt.Errorf("decode DML table name: %w", err)
+			}
+			dmlByTable[name] = append(dmlByTable[name], e)
+
+		default:
+			return fmt.Errorf("unknown WAL op %d during migration", e.Op)
+		}
+	}
+
+	// Create tables directory.
+	tablesDir := filepath.Join(dataDir, tablesDirName)
+	if err := os.MkdirAll(tablesDir, 0755); err != nil {
+		return err
+	}
+
+	// Write catalog.wal (DDL entries only).
+	catalogPath := filepath.Join(dataDir, catalogWALName)
+	if err := writeWALFile(catalogPath, ddlEntries); err != nil {
+		return fmt.Errorf("write catalog WAL: %w", err)
+	}
+
+	// Write per-table WAL files (DML entries for surviving tables only).
+	for name := range alive {
+		dmlEntries, ok := dmlByTable[name]
+		if !ok {
+			// Table exists but has no DML — create empty WAL.
+			dmlEntries = nil
+		}
+		walPath := filepath.Join(tablesDir, tableFileName(name))
+		if err := writeWALFile(walPath, dmlEntries); err != nil {
+			return fmt.Errorf("write table WAL %q: %w", name, err)
+		}
+	}
+
+	// Back up the legacy WAL.
+	backupPath := chooseBackupPath(legacyPath)
+	if err := os.Rename(legacyPath, backupPath); err != nil {
+		return fmt.Errorf("backup legacy WAL: %w", err)
+	}
+
+	return nil
+}
+
+// writeWALFile creates a new WAL file with the current header and the
+// given raw entries.
+func writeWALFile(path string, entries []rawEntry) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	if err := writeWALHeader(f); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+
+	for _, e := range entries {
+		if err := writeRawEntry(f, e.Op, e.Payload); err != nil {
+			f.Close()
+			os.Remove(path)
+			return err
+		}
+	}
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+	return f.Close()
 }

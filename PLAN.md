@@ -16,7 +16,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Data types | `INTEGER`, `TEXT`, `BOOLEAN` |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
-| Concurrency | Single-writer, multi-reader (one write goroutine, concurrent reads) |
+| Concurrency | Per-table locking: concurrent writes to independent tables, multi-reader per table |
 | Config | CLI flags with env var fallbacks (`MULLDB_PORT`, etc.) |
 | Process model | Foreground daemon, graceful shutdown on SIGINT/SIGTERM |
 | Modularity | Go interfaces at every layer boundary; packages interact only through contracts |
@@ -110,16 +110,15 @@ psql / PG drivers
 ├─────────────────────┤
 │   Storage Engine     │
 │   ├─ Catalog         │  Table definitions (schema metadata)
-│   ├─ Heap (data log) │  Append-only row storage per table
-│   ├─ WAL             │  Write-ahead log for crash recovery
-│   └─ Index           │  In-memory index (rebuilt from heap on startup)
+│   ├─ Heap (data log) │  In-memory row storage per table
+│   ├─ WAL             │  Per-table write-ahead logs for crash recovery
+│   └─ Index           │  In-memory B-tree index (rebuilt from WAL on startup)
 └─────────────────────┘
        │
     Data dir: ./data/
-    ├── wal/          WAL segments
-    ├── catalog.dat   Table schemas
+    ├── catalog.wal      DDL log (CREATE/DROP TABLE)
     └── tables/
-        └── <table>/  One data file per table
+        └── <name>.wal   Per-table DML log
 ```
 
 ## Project Structure

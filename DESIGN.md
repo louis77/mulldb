@@ -148,7 +148,27 @@ The cost is O(n) memory per scan. For a database targeting light workloads, this
 
 Every mutation follows the WAL-first rule: write to the log, fsync, then apply to the in-memory heap. On restart, the WAL is replayed from the beginning to reconstruct the full in-memory state.
 
-**File format:** Every WAL file begins with a 6-byte header: a 4-byte magic number (`"MWAL"`) followed by a uint16 format version. The version allows the engine to detect and automatically migrate WAL files written by older versions of the binary (see "WAL Migration" below). After the header, the file is a sequence of entries:
+**Per-table file layout.** The WAL is split into per-table files rather than a single monolithic log:
+
+```
+<dataDir>/
+├── catalog.wal          # DDL only: CreateTable / DropTable entries
+└── tables/
+    ├── users.wal        # DML for "users" table
+    └── orders.wal       # DML for "orders" table
+```
+
+`catalog.wal` contains only DDL entries (CreateTable, DropTable). Each surviving table gets its own WAL file under `tables/` containing only DML entries (Insert, Delete, Update). DML entries still include the table name as a safety cross-check during replay.
+
+This split provides three benefits: DROP TABLE instantly reclaims disk space (delete the file), concurrent writes to different tables hit different files (no contention), and per-table replay is trivially parallelizable (though currently sequential).
+
+**Table name encoding.** Table names are percent-encoded for filesystem safety: characters outside `[a-zA-Z0-9_-]` are encoded as `%XX` (e.g. `"my table"` → `my%20table.wal`). The encoding is reversible for orphan cleanup on startup.
+
+**Two-phase replay.** On startup, `Open()` replays the catalog WAL first (learning all table schemas and which tables were dropped), then opens and replays each surviving table's WAL file to populate heaps and indexes. Two dedicated replay handlers enforce separation: `catalogReplayHandler` rejects DML entries, `dmlReplayHandler` rejects DDL entries and validates that each entry's table name matches the expected table.
+
+**Orphan cleanup.** After catalog replay, the engine scans the `tables/` directory and deletes WAL files for tables that don't exist in the catalog. This handles the case where a crash occurred between writing the DROP TABLE entry to the catalog WAL and deleting the table's WAL file.
+
+**Per-file binary format.** Each WAL file begins with a 6-byte header: a 4-byte magic number (`"MWAL"`) followed by a uint16 format version. The `WAL` struct is reused as-is for every file — one instance for the catalog, one per table. After the header, the file is a sequence of entries:
 
 ```
 [header: "MWAL" + uint16 version]
@@ -168,8 +188,6 @@ The length prefix allows reading entry boundaries without parsing. The CRC-32 ch
 
 This fsync-per-write strategy is slow for high-throughput workloads (group commits would batch multiple operations into one fsync). But for light workloads, correctness is more valuable than throughput.
 
-**No separate catalog file.** Table schemas (column names, types, primary key flags) are recorded in the WAL as CreateTable entries. The catalog is rebuilt during replay, so there's no second file to keep in sync with the WAL.
-
 ### WAL Migration
 
 The WAL binary format evolves as features are added. When a new version of the binary opens an older WAL file, it needs to understand the old format and convert it. Rather than requiring users to wipe their data directory on upgrades, the engine supports explicit WAL migration via the `--migrate` CLI flag.
@@ -185,6 +203,8 @@ The WAL binary format evolves as features are added. When a new version of the b
 **Safe file handling.** Migration reads all entries from the old file, transforms them, and writes a new file (`wal.dat.mig`) with the current-version header and migrated entries. After fsync, the original is renamed to `wal.dat.bak` (preserving it as a backup), and the new file is moved into place. If a `.bak` file already exists, a numbered suffix is used (`.bak.1`, `.bak.2`, etc.). The user is told they can manually delete the backup after verifying. If the process crashes mid-migration, the original file is still intact.
 
 The first migration (v1→v2) handles the addition of the primary key flag byte to CreateTable column entries. Old columns get `PrimaryKey: false` since the concept didn't exist in v1.
+
+**Split WAL migration.** When the engine detects a legacy single `wal.dat` file (and no `catalog.wal`), it requires a structural migration to the per-table layout. The migration reads all entries from `wal.dat`, classifies them as DDL or DML, tracks which tables survive after all CREATE/DROP sequences, and writes: `catalog.wal` (all DDL entries), plus `tables/<name>.wal` for each surviving table (only that table's DML entries). DML for dropped tables is discarded, immediately reclaiming space. The original `wal.dat` is preserved as `wal.dat.bak`. If the legacy file also needs a format version upgrade (e.g. v1→v2), that migration runs first, then the split migration follows.
 
 ### Primary Key Index
 
@@ -253,13 +273,19 @@ Scalar functions like `VERSION()` follow a registry pattern. Each function regis
 
 ## Concurrency Model
 
-mulldb uses a single `sync.RWMutex` protecting all storage state (catalog + heaps + WAL). Writers acquire the write lock; readers acquire the read lock. Multiple concurrent reads proceed in parallel. Writes are serialized.
+mulldb uses per-table locking to allow concurrent writes to independent tables. The locking scheme has two levels:
 
-This is the simplest concurrency model that provides useful parallelism. The scan-snapshot design (copying rows before releasing the lock) means readers hold the lock only briefly — just long enough to copy the data — so writes aren't blocked for long even during large SELECTs.
+**Catalog lock (`catalogMu`).** A `sync.RWMutex` protects the table registry (the `catalog` and `tableStates` map). DDL operations (`CreateTable`, `DropTable`) take the write lock. DML operations take a brief read lock to look up the target table's `tableState`, then release the catalog lock before acquiring the table lock.
 
-What we don't have: per-table locks (would allow concurrent writes to different tables, but adds complexity), transactions spanning multiple statements (each statement is atomic in isolation), or MVCC (readers see the latest committed state, not a consistent snapshot across statements).
+**Per-table lock (`tableState.mu`).** Each table has its own `sync.RWMutex` embedded in a `tableState` struct alongside its heap, WAL file handle, and a `dropped` flag. DML write operations (`Insert`, `Update`, `Delete`) take the table's write lock; reads (`Scan`, `LookupByPK`) take the table's read lock.
 
-For the stated goal of light workloads, single-writer serialization is sufficient. The bottleneck in practice is disk fsync on writes, not lock contention.
+Lock ordering is always catalog before table (never reversed), which prevents deadlocks. The `acquireTableWrite` and `acquireTableRead` helpers encapsulate this pattern: brief catalog read lock → look up `tableState` → release catalog lock → acquire table lock → check `dropped` flag.
+
+**DROP TABLE race guard.** A DML goroutine could grab a `tableState` pointer under the catalog read lock, release the catalog lock, and then find the table was dropped before it acquires the table lock. The `dropped` boolean flag in `tableState` catches this — DML checks it after acquiring the table lock and returns `TableNotFoundError` if set. DROP TABLE sets `dropped = true` while holding both the catalog write lock and the table write lock.
+
+The scan-snapshot design (copying rows before releasing the lock) means readers hold the table lock only briefly — just long enough to copy the data — so writes aren't blocked for long even during large SELECTs.
+
+What we don't have: transactions spanning multiple statements (each statement is atomic in isolation), or MVCC (readers see the latest committed state, not a consistent snapshot across statements).
 
 ## Error Handling
 
@@ -286,3 +312,4 @@ On shutdown (SIGINT/SIGTERM), the server closes the listener (stopping new conne
 - **Disk-based storage:** All data lives in memory (reconstructed from WAL on startup). A disk-based B-tree or LSM tree would be the natural next step for datasets larger than RAM.
 - **Query optimizer:** There is no cost-based optimizer. The only optimization is the PK index lookup. Everything else is a sequential scan with filter. This is fine for small tables and keeps execution predictable.
 - **GROUP BY / HAVING / JOIN:** These require more complex execution operators (hash join, sort-merge, grouping). The current aggregate path handles the simplest case (whole-table aggregation).
+- **MVCC:** Readers see the latest committed state. There is no multi-version concurrency control or snapshot isolation across statements.

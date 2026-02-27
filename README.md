@@ -34,7 +34,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 ## Features
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
-- **Persistent storage** — write-ahead log (WAL) with CRC32 checksums and fsync for crash recovery
+- **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
 - **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
@@ -44,7 +44,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Full UTF-8 support** — identifiers, string literals, and all data are UTF-8 throughout; no other character encoding exists
 - **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`), Unicode identifiers (`"café"`, `"名前"`)
 - **WAL migration** — versioned WAL format with opt-in `--migrate` flag and backup preservation
-- **Concurrent access** — single-writer / multi-reader via RWMutex, safe for multiple connections
+- **Concurrent access** — per-table locking allows concurrent writes to independent tables; multiple readers can run in parallel on any table
 - **Cleartext password authentication** — simple username/password access control
 - **Graceful shutdown** — drains active connections on SIGINT/SIGTERM
 - **Proper error codes** — PostgreSQL SQLSTATE codes in ErrorResponse messages
@@ -403,11 +403,13 @@ psql / PG drivers
 │   ├─ Catalog         │  In-memory table schemas (rebuilt from WAL)
 │   ├─ Heap            │  In-memory row data per table
 │   ├─ Index           │  B-tree indexes for primary key columns
-│   └─ WAL             │  Append-only log for crash recovery
+│   └─ WAL             │  Per-table append-only logs for crash recovery
 └─────────────────────┘
        │
     Data dir
-    └── wal.dat         Write-ahead log
+    ├── catalog.wal      DDL log (CREATE/DROP TABLE)
+    └── tables/
+        └── <name>.wal   Per-table DML log
 ```
 
 ### Design Principles
@@ -421,18 +423,26 @@ psql / PG drivers
 
 Multiple clients can connect simultaneously. The server spawns a goroutine per connection (`server/server.go`), and all goroutines share a single stateless executor that forwards calls to the storage engine.
 
-**Global RWMutex.** The storage engine (`storage/engine.go`) uses a single `sync.RWMutex` to protect all state:
+**Per-table locking.** The storage engine (`storage/engine.go`) uses a two-level locking scheme:
 
-| Lock mode | Operations |
-|-----------|-----------|
-| Read lock (`RLock`) | `GetTable`, `ListTables`, `Scan`, `LookupByPK` |
-| Write lock (`Lock`) | `CreateTable`, `DropTable`, `Insert`, `Update`, `Delete` |
+- A **catalog lock** (`catalogMu`) protects the table registry. DDL operations (`CreateTable`, `DropTable`) take a write lock; DML operations take a brief read lock to look up the target table, then release it.
+- Each table has its own **table lock** (`tableState.mu`). DML operations (`Insert`, `Update`, `Delete`) take the table's write lock; read operations (`Scan`, `LookupByPK`) take the table's read lock.
 
-Multiple readers can run concurrently across any tables. Only one writer can proceed at a time, and it blocks all readers while held. The lock is global, not per-table — a write to table A blocks reads from table B.
+This means writes to different tables can proceed concurrently — inserting into table A does not block inserts into table B.
 
-**Snapshot iterators.** `Scan` copies all matching rows into a new slice while the read lock is held, then returns an iterator over that private snapshot. The iterator is safe to consume after the lock is released. `LookupByPK` similarly returns a copied row.
+| Operation | Catalog lock | Table lock |
+|-----------|-------------|------------|
+| `CreateTable` | Write (held throughout) | — |
+| `DropTable` | Write | Write |
+| `Insert`, `Update`, `Delete` | Read (brief) | Write |
+| `Scan`, `LookupByPK` | Read (brief) | Read |
+| `GetTable`, `ListTables` | Read | — |
 
-**WAL and index safety.** Neither the WAL (`storage/wal.go`) nor the B-tree index (`storage/index/btree.go`) have internal locks. They rely on being called only while the engine's global lock is held.
+Lock ordering is always catalog before table (never reversed), which prevents deadlocks.
+
+**Snapshot iterators.** `Scan` copies all matching rows into a new slice while the table's read lock is held, then returns an iterator over that private snapshot. The iterator is safe to consume after the lock is released. `LookupByPK` similarly returns a copied row.
+
+**DROP TABLE race guard.** A DML goroutine could grab a `tableState` pointer, release the catalog lock, then find the table was dropped before it acquires the table lock. Each `tableState` has a `dropped` flag that DML checks after acquiring the table lock, returning `TableNotFoundError` if set.
 
 **Atomic batch writes.** Multi-row `INSERT` and `UPDATE` validate all constraints (PK uniqueness, column count) before writing anything. If validation passes, WAL entries are written and in-memory state is updated within a single lock acquisition — no partial writes on constraint violation.
 
@@ -441,21 +451,33 @@ Multiple readers can run concurrently across any tables. Only one writer can pro
 Every write goes through the WAL before being applied in memory:
 
 1. Caller invokes `engine.Insert(...)` (or Update, Delete, etc.)
-2. Engine acquires write lock
-3. WAL entry is written and fsynced: `[4-byte length][1-byte op][payload][4-byte CRC32]`
+2. Engine acquires the table's write lock
+3. WAL entry is written to the table's WAL file and fsynced: `[4-byte length][1-byte op][payload][4-byte CRC32]`
 4. In-memory heap is updated
 5. Lock is released
 
-On startup, `Open()` replays the WAL from the beginning, calling `OnCreateTable`, `OnInsert`, `OnDelete`, `OnUpdate` to rebuild the full in-memory state (including indexes). This means the WAL is the sole source of truth — there are no separate data files.
+**Split WAL layout.** The WAL is split into per-table files:
 
-The WAL file uses a versioned binary format (`[4-byte magic "MWAL"][uint16 version][entries...]`). When the format changes between releases, the `--migrate` flag must be used to upgrade the file. See [WAL Migration](#wal-migration).
+```
+<dataDir>/
+├── catalog.wal          # DDL only: CreateTable / DropTable entries
+└── tables/
+    ├── users.wal        # DML for "users" table
+    └── orders.wal       # DML for "orders" table
+```
+
+DDL operations (CREATE TABLE, DROP TABLE) are logged to `catalog.wal`. DML operations (INSERT, UPDATE, DELETE) are logged to the individual table's WAL file. This means DROP TABLE can instantly reclaim disk space by deleting the table's WAL file, and concurrent writes to different tables hit different files.
+
+On startup, `Open()` performs a two-phase replay: first the catalog WAL (to learn table schemas), then each surviving table's WAL (to populate heaps). Orphan WAL files (from a crash during DROP TABLE) are cleaned up automatically.
+
+Each WAL file uses a versioned binary format (`[4-byte magic "MWAL"][uint16 version][entries...]`). When the format changes between releases, the `--migrate` flag must be used to upgrade. See [WAL Migration](#wal-migration).
 
 ## WAL Migration
 
-The WAL (write-ahead log) uses a versioned binary format. When a new release changes the format, the engine will refuse to start:
+The WAL uses a versioned binary format and a per-table file layout. When a new release changes the format or layout, the engine will refuse to start:
 
 ```
-open storage: WAL file is format version 1 but version 2 is required; restart with --migrate flag
+data directory uses legacy single-WAL format; restart with --migrate flag to convert to per-table WAL files
 ```
 
 To migrate, restart with `--migrate`:
@@ -464,12 +486,12 @@ To migrate, restart with `--migrate`:
 ./mulldb --datadir ./data --migrate
 ```
 
-The migration:
+The `--migrate` flag handles two kinds of migration:
 
-1. Checks that enough disk space is available (roughly 2x the WAL file size)
-2. Writes a new WAL file in the current format
-3. Preserves the original as `data/wal.dat.bak` (or `.bak.1`, `.bak.2`, etc. if a backup already exists)
-4. Starts the engine normally
+1. **Format version migration** — upgrades the binary entry format (e.g. v1→v2 added primary key flags). The original `wal.dat` is preserved as `wal.dat.bak`.
+2. **Split WAL migration** — converts a legacy single `wal.dat` into the per-table layout (`catalog.wal` + `tables/<name>.wal`). DML entries for dropped tables are discarded, immediately reclaiming space. The original `wal.dat` is preserved as `wal.dat.bak`.
+
+Both migrations are chained automatically when needed (e.g. a v1 single-WAL file gets format-upgraded first, then split).
 
 After verifying the database works correctly, you can manually delete the backup file. The engine will never delete it for you.
 
@@ -521,10 +543,12 @@ mulldb/
     ├── heap.go             In-memory row storage per table
     ├── compare.go          Type-aware value comparison
     ├── wal.go              Write-ahead log (write, replay, checksums)
-    ├── wal_migrate.go      WAL format migration framework
+    ├── wal_migrate.go      WAL format + split-WAL migration framework
     ├── wal_test.go         WAL migration tests
     ├── row.go              Binary row encoding/decoding
-    ├── engine.go           WAL-first engine with RWMutex concurrency
+    ├── tablefile.go        Table name ↔ filename encoding (percent-encoding)
+    ├── tablefile_test.go
+    ├── engine.go           Per-table WAL engine with per-table locking
     ├── engine_test.go
     │
     └── index/
@@ -548,7 +572,7 @@ go test -race ./...
 
 The test suite covers:
 - **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, column aliases (AS), optional FROM clause, UTF-8 identifiers and string literals, error cases
-- **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes
+- **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
 - **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling

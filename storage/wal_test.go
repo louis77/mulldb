@@ -432,9 +432,9 @@ func TestWAL_EngineRefusesMigrationWithoutFlag(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	var migErr *WALMigrationNeededError
+	var migErr *SplitWALMigrationNeededError
 	if !errors.As(err, &migErr) {
-		t.Fatalf("expected WALMigrationNeededError, got: %T: %v", err, err)
+		t.Fatalf("expected SplitWALMigrationNeededError, got: %T: %v", err, err)
 	}
 }
 
