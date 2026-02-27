@@ -73,7 +73,7 @@ All options can be set via CLI flags or environment variables. Environment varia
 | `--datadir` | `MULLDB_DATADIR` | `./data` | Directory for WAL and data files |
 | `--user` | `MULLDB_USER` | `admin` | Username for authentication |
 | `--password` | `MULLDB_PASSWORD` | *(empty)* | Password for authentication |
-| `--log-level` | `MULLDB_LOG_LEVEL` | `0` | Log verbosity: `0` = off, `1` = log every SQL statement |
+| `--log-level` | `MULLDB_LOG_LEVEL` | `0` | Log verbosity: `0` = off, `1` = log SQL statements with outcome (`OK`/`ERROR`) and row counts |
 
 Example with environment variables:
 

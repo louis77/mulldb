@@ -158,15 +158,14 @@ func (c *Connection) handleQuery(query string) error {
 		return c.sendReady()
 	}
 
-	if c.cfg.LogLevel >= 1 {
-		log.Printf("[SQL] %s", query)
-	}
-
 	// Handle SET commands that psql sends during startup — our parser
 	// doesn't cover SET, so we return a stub response.
 	if strings.HasPrefix(strings.ToUpper(query), "SET") {
 		if err := c.writer.WriteCommandComplete("SET"); err != nil {
 			return err
+		}
+		if c.cfg.LogLevel >= 1 {
+			log.Printf("[SQL] OK     %s — SET", query)
 		}
 		return c.sendReady()
 	}
@@ -181,6 +180,9 @@ func (c *Connection) handleQuery(query string) error {
 		}
 		if werr := c.writer.WriteErrorResponse("ERROR", code, err.Error()); werr != nil {
 			return werr
+		}
+		if c.cfg.LogLevel >= 1 {
+			log.Printf("[SQL] ERROR  %s — %s", query, err.Error())
 		}
 		return c.sendReady()
 	}
@@ -208,6 +210,9 @@ func (c *Connection) handleQuery(query string) error {
 
 	if err := c.writer.WriteCommandComplete(result.Tag); err != nil {
 		return err
+	}
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] OK     %s — %s", query, result.Tag)
 	}
 	return c.sendReady()
 }
