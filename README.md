@@ -314,6 +314,34 @@ SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE
 --  active      | boolean   | YES
 ```
 
+### Statement Tracing
+
+mulldb has built-in statement tracing for diagnosing query performance. Tracing is per-connection and off by default.
+
+```sql
+SET trace = on;   -- enable tracing
+SET trace = off;  -- disable tracing
+```
+
+When tracing is enabled, every statement records timing and metadata. Use `SHOW TRACE` to inspect the last statement's trace:
+
+```sql
+SET trace = on;
+SELECT * FROM users WHERE id = 1;
+SHOW TRACE;
+--  step          | duration
+-- ---------------+----------
+--  Parse         | 12.5µs
+--  Plan          | 3.2µs
+--  Execute       | 1.1µs
+--  Total         | 16.8µs
+--  Statement     | SELECT
+--  Table         | users
+--  Rows Scanned  | 1
+--  Rows Returned | 1
+--  Used Index    | true
+```
+
 ### WHERE Expressions
 
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`

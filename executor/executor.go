@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"mulldb/parser"
 	"mulldb/storage"
@@ -20,26 +21,74 @@ func New(engine storage.Engine) *Executor {
 	return &Executor{engine: engine}
 }
 
-// Execute runs a single SQL statement.
+// Execute runs a single SQL statement (no tracing overhead).
 func (e *Executor) Execute(sql string) (*Result, error) {
+	return e.execute(sql, nil)
+}
+
+// ExecuteTraced runs a single SQL statement with timing instrumentation.
+func (e *Executor) ExecuteTraced(sql string) (*Result, *Trace, error) {
+	tr := &Trace{}
+	start := time.Now()
+	result, err := e.execute(sql, tr)
+	tr.Total = time.Since(start)
+	return result, tr, err
+}
+
+func (e *Executor) execute(sql string, tr *Trace) (*Result, error) {
+	var parseStart time.Time
+	if tr != nil {
+		parseStart = time.Now()
+	}
+
 	stmt, err := parser.Parse(sql)
+
+	if tr != nil {
+		tr.Parse = time.Since(parseStart)
+	}
 	if err != nil {
 		return nil, &QueryError{Code: "42601", Message: err.Error()} // syntax_error
 	}
 
 	switch s := stmt.(type) {
 	case *parser.CreateTableStmt:
-		return e.execCreateTable(s)
+		if tr != nil {
+			tr.StmtType = "CREATE TABLE"
+			tr.Table = s.Name.Name
+		}
+		return e.execCreateTable(s, tr)
 	case *parser.DropTableStmt:
-		return e.execDropTable(s)
+		if tr != nil {
+			tr.StmtType = "DROP TABLE"
+			tr.Table = s.Name.Name
+		}
+		return e.execDropTable(s, tr)
 	case *parser.InsertStmt:
-		return e.execInsert(s)
+		if tr != nil {
+			tr.StmtType = "INSERT"
+			tr.Table = s.Table.Name
+		}
+		return e.execInsert(s, tr)
 	case *parser.SelectStmt:
-		return e.execSelect(s)
+		if tr != nil {
+			tr.StmtType = "SELECT"
+			if !s.From.IsEmpty() {
+				tr.Table = s.From.String()
+			}
+		}
+		return e.execSelect(s, tr)
 	case *parser.UpdateStmt:
-		return e.execUpdate(s)
+		if tr != nil {
+			tr.StmtType = "UPDATE"
+			tr.Table = s.Table.Name
+		}
+		return e.execUpdate(s, tr)
 	case *parser.DeleteStmt:
-		return e.execDelete(s)
+		if tr != nil {
+			tr.StmtType = "DELETE"
+			tr.Table = s.Table.Name
+		}
+		return e.execDelete(s, tr)
 	default:
 		return nil, &QueryError{Code: "42601", Message: fmt.Sprintf("unsupported statement type %T", stmt)}
 	}
@@ -49,7 +98,12 @@ func (e *Executor) Execute(sql string) (*Result, error) {
 // Statement executors
 // -------------------------------------------------------------------------
 
-func (e *Executor) execCreateTable(s *parser.CreateTableStmt) (*Result, error) {
+func (e *Executor) execCreateTable(s *parser.CreateTableStmt, tr *Trace) (*Result, error) {
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
+	}
+
 	cols := make([]storage.ColumnDef, len(s.Columns))
 	for i, c := range s.Columns {
 		dt, err := parseDataType(c.DataType)
@@ -58,22 +112,52 @@ func (e *Executor) execCreateTable(s *parser.CreateTableStmt) (*Result, error) {
 		}
 		cols[i] = storage.ColumnDef{Name: c.Name, DataType: dt, PrimaryKey: c.PrimaryKey}
 	}
+
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
 	if err := e.engine.CreateTable(s.Name.Name, cols); err != nil {
 		return nil, WrapError(err)
 	}
+
+	if tr != nil {
+		tr.Exec = time.Since(execStart)
+	}
+
 	return &Result{Tag: "CREATE TABLE"}, nil
 }
 
-func (e *Executor) execDropTable(s *parser.DropTableStmt) (*Result, error) {
+func (e *Executor) execDropTable(s *parser.DropTableStmt, tr *Trace) (*Result, error) {
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
 	if err := e.engine.DropTable(s.Name.Name); err != nil {
 		return nil, WrapError(err)
 	}
+
+	if tr != nil {
+		tr.Exec = time.Since(execStart)
+	}
+
 	return &Result{Tag: "DROP TABLE"}, nil
 }
 
-func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
+func (e *Executor) execInsert(s *parser.InsertStmt, tr *Trace) (*Result, error) {
 	if isCatalogTable(s.Table.Schema, s.Table.Name) {
 		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot insert into catalog table %q", s.Table.String())}
+	}
+
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
 	}
 
 	def, ok := e.engine.GetTable(s.Table.Name)
@@ -94,18 +178,37 @@ func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 		rows[i] = vals
 	}
 
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
 	n, err := e.engine.Insert(s.Table.Name, s.Columns, rows)
 	if err != nil {
 		return nil, WrapError(err)
+	}
+
+	if tr != nil {
+		tr.Exec = time.Since(execStart)
+		tr.RowsReturned = int64(n)
 	}
 
 	_ = def // used above for context; insert delegates column resolution to engine
 	return &Result{Tag: fmt.Sprintf("INSERT 0 %d", n)}, nil
 }
 
-func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
+func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) {
 	if s.From.IsEmpty() {
 		return execSelectStatic(s.Columns)
+	}
+
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
 	}
 
 	// Check catalog tables before the storage engine.
@@ -147,7 +250,7 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		}
 	}
 	if hasAgg {
-		return e.execSelectAggregate(s, def)
+		return e.execSelectAggregate(s, def, tr)
 	}
 
 	// Resolve which columns to return.
@@ -165,9 +268,22 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		}
 	}
 
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
 	// Try PK index lookup for simple equality on the primary key column.
 	if !isCatalog && s.Where != nil {
 		if row, ok := e.tryPKLookup(s.Where, def); ok {
+			if tr != nil {
+				tr.UsedIndex = true
+				tr.RowsScanned = 1
+			}
 			// Apply OFFSET/LIMIT to the single-row result.
 			var resultRows [][][]byte
 			skip := s.Offset != nil && *s.Offset > 0
@@ -178,6 +294,10 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 					textRow[i] = formatValue(row.Values[idx])
 				}
 				resultRows = [][][]byte{textRow}
+			}
+			if tr != nil {
+				tr.RowsReturned = int64(len(resultRows))
+				tr.Exec = time.Since(execStart)
 			}
 			return &Result{
 				Columns: resultCols,
@@ -211,11 +331,13 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 
 	var resultRows [][][]byte
 	var matched int64
+	var scanned int64
 	for {
 		row, ok := it.Next()
 		if !ok {
 			break
 		}
+		scanned++
 		if filter != nil && !filter(row) {
 			continue
 		}
@@ -236,6 +358,12 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		}
 	}
 
+	if tr != nil {
+		tr.RowsScanned = scanned
+		tr.RowsReturned = int64(len(resultRows))
+		tr.Exec = time.Since(execStart)
+	}
+
 	return &Result{
 		Columns: resultCols,
 		Rows:    resultRows,
@@ -243,7 +371,12 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 	}, nil
 }
 
-func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableDef) (*Result, error) {
+func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableDef, tr *Trace) (*Result, error) {
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
+	}
+
 	type aggAcc struct {
 		funcName  string
 		colIdx    int // -1 for COUNT(*)
@@ -313,6 +446,15 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		}
 	}
 
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
 	// Scan all rows and accumulate.
 	var it storage.RowIterator
 	var err error
@@ -326,11 +468,13 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 	}
 	defer it.Close()
 
+	var scanned int64
 	for {
 		row, ok := it.Next()
 		if !ok {
 			break
 		}
+		scanned++
 		for _, acc := range accs {
 			switch acc.funcName {
 			case "COUNT":
@@ -387,6 +531,12 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		rows = nil
 	}
 
+	if tr != nil {
+		tr.RowsScanned = scanned
+		tr.RowsReturned = int64(len(rows))
+		tr.Exec = time.Since(execStart)
+	}
+
 	return &Result{
 		Columns: resultCols,
 		Rows:    rows,
@@ -426,9 +576,14 @@ func execSelectStatic(exprs []parser.Expr) (*Result, error) {
 }
 
 
-func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
+func (e *Executor) execUpdate(s *parser.UpdateStmt, tr *Trace) (*Result, error) {
 	if isCatalogTable(s.Table.Schema, s.Table.Name) {
 		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot update catalog table %q", s.Table.String())}
+	}
+
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
 	}
 
 	def, ok := e.engine.GetTable(s.Table.Name)
@@ -456,16 +611,36 @@ func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 		}
 	}
 
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
 	n, err := e.engine.Update(s.Table.Name, sets, filter)
 	if err != nil {
 		return nil, WrapError(err)
 	}
+
+	if tr != nil {
+		tr.RowsReturned = int64(n)
+		tr.Exec = time.Since(execStart)
+	}
+
 	return &Result{Tag: fmt.Sprintf("UPDATE %d", n)}, nil
 }
 
-func (e *Executor) execDelete(s *parser.DeleteStmt) (*Result, error) {
+func (e *Executor) execDelete(s *parser.DeleteStmt, tr *Trace) (*Result, error) {
 	if isCatalogTable(s.Table.Schema, s.Table.Name) {
 		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot delete from catalog table %q", s.Table.String())}
+	}
+
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
 	}
 
 	def, ok := e.engine.GetTable(s.Table.Name)
@@ -482,10 +657,25 @@ func (e *Executor) execDelete(s *parser.DeleteStmt) (*Result, error) {
 		}
 	}
 
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
 	n, err := e.engine.Delete(s.Table.Name, filter)
 	if err != nil {
 		return nil, WrapError(err)
 	}
+
+	if tr != nil {
+		tr.RowsReturned = int64(n)
+		tr.Exec = time.Since(execStart)
+	}
+
 	return &Result{Tag: fmt.Sprintf("DELETE %d", n)}, nil
 }
 

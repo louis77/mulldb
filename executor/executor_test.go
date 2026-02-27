@@ -785,6 +785,127 @@ func TestExecutor_PrimaryKey_LimitWithIndex(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// ExecuteTraced
+// -------------------------------------------------------------------------
+
+func TestExecuteTraced_Select(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')")
+
+	result, tr, err := e.ExecuteTraced("SELECT * FROM t")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if len(result.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(result.Rows))
+	}
+	if tr.StmtType != "SELECT" {
+		t.Errorf("StmtType = %q, want SELECT", tr.StmtType)
+	}
+	if tr.Table != "t" {
+		t.Errorf("Table = %q, want t", tr.Table)
+	}
+	if tr.Total == 0 {
+		t.Error("Total duration should be non-zero")
+	}
+	if tr.Parse == 0 {
+		t.Error("Parse duration should be non-zero")
+	}
+	if tr.RowsScanned != 3 {
+		t.Errorf("RowsScanned = %d, want 3", tr.RowsScanned)
+	}
+	if tr.RowsReturned != 3 {
+		t.Errorf("RowsReturned = %d, want 3", tr.RowsReturned)
+	}
+}
+
+func TestExecuteTraced_SelectWithPKLookup(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice'), (2, 'bob')")
+
+	_, tr, err := e.ExecuteTraced("SELECT name FROM t WHERE id = 1")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if !tr.UsedIndex {
+		t.Error("expected UsedIndex = true for PK equality lookup")
+	}
+	if tr.RowsScanned != 1 {
+		t.Errorf("RowsScanned = %d, want 1", tr.RowsScanned)
+	}
+	if tr.RowsReturned != 1 {
+		t.Errorf("RowsReturned = %d, want 1", tr.RowsReturned)
+	}
+}
+
+func TestExecuteTraced_Insert(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+
+	result, tr, err := e.ExecuteTraced("INSERT INTO t VALUES (1, 'alice'), (2, 'bob')")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if result.Tag != "INSERT 0 2" {
+		t.Errorf("tag = %q, want INSERT 0 2", result.Tag)
+	}
+	if tr.StmtType != "INSERT" {
+		t.Errorf("StmtType = %q, want INSERT", tr.StmtType)
+	}
+	if tr.Total == 0 {
+		t.Error("Total duration should be non-zero")
+	}
+}
+
+func TestExecuteTraced_CreateTable(t *testing.T) {
+	e := setup(t)
+
+	_, tr, err := e.ExecuteTraced("CREATE TABLE t (id INTEGER, name TEXT)")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if tr.StmtType != "CREATE TABLE" {
+		t.Errorf("StmtType = %q, want CREATE TABLE", tr.StmtType)
+	}
+	if tr.Table != "t" {
+		t.Errorf("Table = %q, want t", tr.Table)
+	}
+}
+
+func TestTraceToResult(t *testing.T) {
+	// nil trace returns "no trace available".
+	r := TraceToResult(nil)
+	if len(r.Rows) != 1 {
+		t.Fatalf("nil trace rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "no trace available" {
+		t.Errorf("nil trace message = %q", r.Rows[0][0])
+	}
+
+	// Non-nil trace returns timing rows.
+	tr := &Trace{
+		StmtType: "SELECT",
+		Table:    "users",
+	}
+	r = TraceToResult(tr)
+	if len(r.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(r.Columns))
+	}
+	if r.Columns[0].Name != "step" {
+		t.Errorf("col[0] = %q, want step", r.Columns[0].Name)
+	}
+	if r.Columns[1].Name != "duration" {
+		t.Errorf("col[1] = %q, want duration", r.Columns[1].Name)
+	}
+	// Should have at least Parse, Plan, Execute, Total, Statement, Table, Rows Scanned, Rows Returned.
+	if len(r.Rows) < 8 {
+		t.Errorf("rows = %d, want at least 8", len(r.Rows))
+	}
+}
+
 func assertSQLSTATE(t *testing.T, err error, expected string) {
 	t.Helper()
 	if err == nil {

@@ -17,11 +17,13 @@ import (
 // Connection handles the lifecycle of a single client connection:
 // startup handshake → authentication → query loop.
 type Connection struct {
-	conn   net.Conn
-	reader *pgwire.Reader
-	writer *pgwire.Writer
-	cfg    *config.Config
-	exec   *executor.Executor
+	conn         net.Conn
+	reader       *pgwire.Reader
+	writer       *pgwire.Writer
+	cfg          *config.Config
+	exec         *executor.Executor
+	traceEnabled bool
+	lastTrace    *executor.Trace
 }
 
 func newConnection(conn net.Conn, cfg *config.Config, exec *executor.Executor) *Connection {
@@ -151,6 +153,8 @@ func (c *Connection) queryLoop() {
 // handleQuery processes a single SQL query string and writes the response.
 func (c *Connection) handleQuery(query string) error {
 	query = strings.TrimSpace(query)
+	query = strings.TrimRight(query, ";")
+	query = strings.TrimSpace(query)
 
 	if query == "" {
 		if err := c.writer.WriteEmptyQueryResponse(); err != nil {
@@ -159,9 +163,12 @@ func (c *Connection) handleQuery(query string) error {
 		return c.sendReady()
 	}
 
+	upper := strings.ToUpper(query)
+
 	// Handle SET commands that psql sends during startup — our parser
 	// doesn't cover SET, so we return a stub response.
-	if strings.HasPrefix(strings.ToUpper(query), "SET") {
+	if strings.HasPrefix(upper, "SET") {
+		c.handleSetTrace(upper)
 		if err := c.writer.WriteCommandComplete("SET"); err != nil {
 			return err
 		}
@@ -171,8 +178,23 @@ func (c *Connection) handleQuery(query string) error {
 		return c.sendReady()
 	}
 
+	// Handle SHOW TRACE — return the stored trace from the last traced statement.
+	if upper == "SHOW TRACE" {
+		result := executor.TraceToResult(c.lastTrace)
+		return c.sendResult(result, query)
+	}
+
 	// Execute via the real parser + executor + storage path.
-	result, err := c.exec.Execute(query)
+	var result *executor.Result
+	var err error
+	if c.traceEnabled {
+		var tr *executor.Trace
+		result, tr, err = c.exec.ExecuteTraced(query)
+		c.lastTrace = tr
+	} else {
+		result, err = c.exec.Execute(query)
+		c.lastTrace = nil
+	}
 	if err != nil {
 		code := "42000" // fallback
 		var qe *executor.QueryError
@@ -231,6 +253,55 @@ func (c *Connection) sendReady() error {
 func (c *Connection) sendFatalError(code, message string) {
 	c.writer.WriteErrorResponse("FATAL", code, message)
 	c.writer.Flush()
+}
+
+// handleSetTrace checks if the SET command is "SET trace = on/off" and
+// updates the connection's tracing state accordingly.
+func (c *Connection) handleSetTrace(upper string) {
+	// Normalize: remove spaces around '='.
+	normalized := strings.Join(strings.Fields(upper), " ")
+	switch {
+	case strings.HasPrefix(normalized, "SET TRACE = ON"),
+		strings.HasPrefix(normalized, "SET TRACE=ON"),
+		strings.HasPrefix(normalized, "SET TRACE TO ON"):
+		c.traceEnabled = true
+	case strings.HasPrefix(normalized, "SET TRACE = OFF"),
+		strings.HasPrefix(normalized, "SET TRACE=OFF"),
+		strings.HasPrefix(normalized, "SET TRACE TO OFF"):
+		c.traceEnabled = false
+		c.lastTrace = nil
+	}
+}
+
+// sendResult writes a query result (RowDescription + DataRows + CommandComplete)
+// and flushes. Used for internal results like SHOW TRACE.
+func (c *Connection) sendResult(result *executor.Result, query string) error {
+	if result.Columns != nil {
+		cols := make([]pgwire.ColumnInfo, len(result.Columns))
+		for i, rc := range result.Columns {
+			cols[i] = pgwire.ColumnInfo{
+				Name:         rc.Name,
+				DataTypeOID:  rc.TypeOID,
+				DataTypeSize: rc.TypeSize,
+				TypeModifier: -1,
+			}
+		}
+		if err := c.writer.WriteRowDescription(cols); err != nil {
+			return err
+		}
+		for _, row := range result.Rows {
+			if err := c.writer.WriteDataRow(row); err != nil {
+				return err
+			}
+		}
+	}
+	if err := c.writer.WriteCommandComplete(result.Tag); err != nil {
+		return err
+	}
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] OK     %s — %s", query, result.Tag)
+	}
+	return c.sendReady()
 }
 
 // stripNull removes a trailing null byte from the payload, which is how
