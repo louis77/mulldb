@@ -4,6 +4,33 @@ A lightweight SQL database written from scratch in Go that speaks the PostgreSQL
 
 mulldb is designed for correctness and clarity over raw performance — a usable tool for light workloads, not a toy, but not aiming for Postgres-level completeness.
 
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [SQL Reference](#sql-reference)
+  - [Supported Statements](#supported-statements)
+  - [Character Encoding](#character-encoding)
+  - [Data Types](#data-types)
+  - [Aggregate Functions](#aggregate-functions)
+  - [Column Aliases (AS)](#column-aliases-as)
+  - [LIMIT and OFFSET](#limit-and-offset)
+  - [Scalar Functions](#scalar-functions)
+  - [Catalog Tables](#catalog-tables)
+  - [Statement Tracing](#statement-tracing)
+  - [WHERE Expressions](#where-expressions)
+- [Architecture](#architecture)
+  - [Design Principles](#design-principles)
+  - [Concurrency Model](#concurrency-model)
+  - [Persistence](#persistence)
+- [WAL Migration](#wal-migration)
+- [Project Structure](#project-structure)
+- [Testing](#testing)
+- [Error Handling](#error-handling)
+- [Limitations](#limitations)
+- [License](#license)
+
 ## Features
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
