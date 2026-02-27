@@ -976,6 +976,28 @@ func TestExecutor_SelectLiterals(t *testing.T) {
 			t.Errorf("row[0][1] = %q, want found", r.Rows[0][1])
 		}
 	})
+
+	t.Run("star with literal", func(t *testing.T) {
+		r := exec(t, e, "SELECT *, true FROM lit WHERE id = 1")
+		if len(r.Columns) != 3 {
+			t.Fatalf("columns = %d, want 3", len(r.Columns))
+		}
+		if r.Columns[0].Name != "id" {
+			t.Errorf("col[0].Name = %q, want id", r.Columns[0].Name)
+		}
+		if r.Columns[1].Name != "name" {
+			t.Errorf("col[1].Name = %q, want name", r.Columns[1].Name)
+		}
+		if r.Columns[2].Name != "?column?" {
+			t.Errorf("col[2].Name = %q, want ?column?", r.Columns[2].Name)
+		}
+		if len(r.Rows) != 1 {
+			t.Fatalf("rows = %d, want 1", len(r.Rows))
+		}
+		if string(r.Rows[0][2]) != "t" {
+			t.Errorf("row[0][2] = %q, want t", r.Rows[0][2])
+		}
+	})
 }
 
 func assertSQLSTATE(t *testing.T, err error, expected string) {

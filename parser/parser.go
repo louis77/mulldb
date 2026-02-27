@@ -263,11 +263,11 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	p.next() // skip SELECT
 
 	var columns []Expr
-	if p.cur.Type == TokenStar {
-		columns = append(columns, &StarExpr{})
-		p.next()
-	} else {
-		for {
+	for {
+		if p.cur.Type == TokenStar {
+			columns = append(columns, &StarExpr{})
+			p.next()
+		} else {
 			expr, err := p.parseExpr()
 			if err != nil {
 				return nil, err
@@ -281,11 +281,11 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 				expr = &AliasExpr{Expr: expr, Alias: alias.Literal}
 			}
 			columns = append(columns, expr)
-			if p.cur.Type != TokenComma {
-				break
-			}
-			p.next()
 		}
+		if p.cur.Type != TokenComma {
+			break
+		}
+		p.next()
 	}
 
 	var from TableRef

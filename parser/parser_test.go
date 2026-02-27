@@ -245,6 +245,38 @@ func TestParse_SelectStar(t *testing.T) {
 	}
 }
 
+func TestParse_SelectStarWithColumns(t *testing.T) {
+	t.Run("star then column", func(t *testing.T) {
+		stmt, err := Parse("SELECT *, name FROM t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sel := stmt.(*SelectStmt)
+		if len(sel.Columns) != 2 {
+			t.Fatalf("columns = %d, want 2", len(sel.Columns))
+		}
+		if _, ok := sel.Columns[0].(*StarExpr); !ok {
+			t.Errorf("column[0] is %T, want *StarExpr", sel.Columns[0])
+		}
+		assertColumnRef(t, sel.Columns[1], "name")
+	})
+
+	t.Run("column then star", func(t *testing.T) {
+		stmt, err := Parse("SELECT id, * FROM t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sel := stmt.(*SelectStmt)
+		if len(sel.Columns) != 2 {
+			t.Fatalf("columns = %d, want 2", len(sel.Columns))
+		}
+		assertColumnRef(t, sel.Columns[0], "id")
+		if _, ok := sel.Columns[1].(*StarExpr); !ok {
+			t.Errorf("column[1] is %T, want *StarExpr", sel.Columns[1])
+		}
+	})
+}
+
 func TestParse_SelectColumns(t *testing.T) {
 	stmt, err := Parse("SELECT id, name FROM users")
 	if err != nil {
