@@ -236,3 +236,68 @@ Wire the parser and storage together.
 - **Phase 3**: Unit tests for storage — insert rows, restart engine, verify data present
 - **Phase 4**: `psql` session: CREATE TABLE → INSERT rows → SELECT back → UPDATE → DELETE → SELECT
 - **Phase 5**: Two concurrent `psql` sessions, one writing, one reading; kill -9 and restart, verify data intact
+
+## Design Philosophy
+
+### Near-Zero Configuration
+
+Traditional SQL databases (PostgreSQL, MySQL/MariaDB) carry decades of historical
+baggage: hundreds of configuration knobs, complex authentication systems, manual
+vacuuming, replication setup, encoding negotiation, and operational rituals that
+overwhelm most use cases. mulldb rejects this complexity.
+
+**Principles:**
+- A single binary with sensible defaults — start it and it works
+- CLI flags with env var fallbacks for the few things that vary (port, data dir, credentials)
+- No `postgresql.conf` equivalent — no tuning knobs for buffer pools, WAL segments, checkpoint intervals
+- UTF-8 only — no character set negotiation or encoding configuration
+- Per-table WAL files and locking — concurrency works correctly without user intervention
+- Authentication is a single username/password pair, not a rule-based `pg_hba.conf`
+
+The target user has a workload that fits comfortably in memory and wants a SQL
+database that speaks PG wire protocol without the operational overhead.
+
+### Native Nested Data
+
+Every SQL database today flattens JOINs into a Cartesian product. An order with 3
+items produces 3 rows with the order columns duplicated. Applications must
+de-duplicate and reconstruct the object graph — either manually or through an ORM.
+
+The common workaround is JSON aggregation (`json_agg`, `json_build_object` in
+PostgreSQL), but this serializes structured data into a text format only to have the
+client parse it back into objects. This is unnecessary overhead at both ends.
+
+mulldb will support returning nested data natively from JOINs.
+
+**Approach — `NEST()` with PG composite/array types:**
+
+```sql
+SELECT o.id, o.date, NEST(i.id, i.name, i.qty) AS items
+FROM orders o
+JOIN order_items i ON o.id = i.order_id
+```
+
+`NEST(...)` returns an array of composite rows — transmitted over the wire as PG
+binary array-of-record, not JSON. This stays within the PostgreSQL wire protocol
+specification:
+
+- **Wire-legal**: PostgreSQL already defines array types and composite (record) types
+  with their own OIDs and binary encodings. No protocol extensions needed.
+- **Driver-compatible**: Major drivers (`pgx` for Go, `asyncpg` for Python,
+  `node-postgres`) already decode composite arrays.
+- **`psql`-friendly**: Text representation renders naturally in the terminal.
+- **No pre-defined types**: mulldb synthesizes the composite type from the query's
+  column list at execution time — no `CREATE TYPE` ceremony.
+
+**Semantics:**
+
+When `NEST()` is used with a JOIN, the executor:
+1. Implicitly groups rows by all non-nested columns — no explicit `GROUP BY` required
+2. Collects the nested columns into an array of composites per group
+3. Returns one row per group with the nested array as a column
+
+This eliminates the Cartesian duplication at the source rather than pushing
+reconstruction to the client.
+
+**Prerequisites**: JOIN support (parser + executor), composite/array type encoding
+in pgwire.

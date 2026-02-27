@@ -35,3 +35,7 @@ go build -o mulldb .
 ./mulldb --port 5433 --datadir ./data --user admin --password secret
 go test ./...
 ```
+
+## Development workflow
+
+After implemented a new feature or fixing a bug, the appropriate markdown files should be updated as outlined by their use case above.
