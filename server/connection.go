@@ -104,6 +104,7 @@ func (c *Connection) startup() error {
 			{"server_encoding", "UTF8"},
 			{"client_encoding", "UTF8"},
 			{"DateStyle", "ISO, MDY"},
+			{"standard_conforming_strings", "on"},
 		}
 		for _, p := range serverParams {
 			if err := c.writer.WriteParameterStatus(p[0], p[1]); err != nil {

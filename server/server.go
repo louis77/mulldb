@@ -15,6 +15,7 @@ import (
 type Server struct {
 	cfg      *config.Config
 	exec     *executor.Executor
+	mu       sync.Mutex // protects listener
 	listener net.Listener
 	wg       sync.WaitGroup
 	quit     chan struct{}
@@ -37,7 +38,9 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+	s.mu.Lock()
 	s.listener = ln
+	s.mu.Unlock()
 	log.Printf("mulldb listening on %s", addr)
 
 	for {
@@ -61,12 +64,26 @@ func (s *Server) ListenAndServe() error {
 	}
 }
 
+// Addr returns the listener's network address, or nil if not yet listening.
+func (s *Server) Addr() net.Addr {
+	s.mu.Lock()
+	ln := s.listener
+	s.mu.Unlock()
+	if ln != nil {
+		return ln.Addr()
+	}
+	return nil
+}
+
 // Shutdown stops accepting new connections and waits for existing ones
 // to finish, respecting the context deadline.
 func (s *Server) Shutdown(ctx context.Context) error {
 	close(s.quit)
-	if s.listener != nil {
-		s.listener.Close()
+	s.mu.Lock()
+	ln := s.listener
+	s.mu.Unlock()
+	if ln != nil {
+		ln.Close()
 	}
 
 	done := make(chan struct{})
