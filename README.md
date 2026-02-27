@@ -458,6 +458,7 @@ Tables can be accessed with or without schema qualification. Unqualified names c
 |-------|---------|-------------|
 | `pg_type` / `pg_catalog.pg_type` | `oid` (INTEGER), `typname` (TEXT) | Type information for supported data types |
 | `pg_database` / `pg_catalog.pg_database` | `datname` (TEXT) | Database names (always returns `mulldb`) |
+| `pg_namespace` / `pg_catalog.pg_namespace` | `oid` (INTEGER), `nspname` (TEXT) | Schema/namespace information (`pg_catalog`, `public`, `information_schema`) |
 | `information_schema.tables` | `table_schema` (TEXT), `table_name` (TEXT), `table_type` (TEXT) | Lists all user tables and system catalog tables |
 | `information_schema.columns` | `table_schema` (TEXT), `table_name` (TEXT), `column_name` (TEXT), `ordinal_position` (INTEGER), `data_type` (TEXT), `is_nullable` (TEXT) | Column metadata for all tables |
 

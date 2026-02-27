@@ -1,6 +1,10 @@
 package storage
 
-import "mulldb/storage/index"
+import (
+	"sort"
+
+	"mulldb/storage/index"
+)
 
 // tableHeap holds the in-memory row data for a single table.
 // It is populated during WAL replay and modified by engine operations.
@@ -122,12 +126,15 @@ func (h *tableHeap) lookupByPK(value any) (*Row, bool) {
 }
 
 // scan returns a RowIterator over all rows in the table.
-// The iteration order is not guaranteed.
+// Rows are returned in insertion order (ascending row ID).
 func (h *tableHeap) scan() RowIterator {
 	rows := make([]Row, 0, len(h.rows))
 	for id, values := range h.rows {
 		rows = append(rows, Row{ID: id, Values: values})
 	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].ID < rows[j].ID
+	})
 	return &sliceIterator{rows: rows}
 }
 

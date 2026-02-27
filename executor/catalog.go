@@ -21,6 +21,7 @@ var catalogTables = map[string]*catalogTable{}
 func init() {
 	registerPGType()
 	registerPGDatabase()
+	registerPGNamespace()
 	registerInformationSchemaTables()
 	registerInformationSchemaColumns()
 }
@@ -59,6 +60,26 @@ func registerPGDatabase() {
 		rows: func(_ storage.Engine) []storage.Row {
 			return []storage.Row{
 				{ID: 1, Values: []any{"mulldb"}},
+			}
+		},
+	}
+}
+
+// registerPGNamespace adds the pg_namespace catalog table.
+func registerPGNamespace() {
+	catalogTables["pg_catalog.pg_namespace"] = &catalogTable{
+		def: &storage.TableDef{
+			Name: "pg_namespace",
+			Columns: []storage.ColumnDef{
+				{Name: "oid", DataType: storage.TypeInteger},
+				{Name: "nspname", DataType: storage.TypeText},
+			},
+		},
+		rows: func(_ storage.Engine) []storage.Row {
+			return []storage.Row{
+				{ID: 1, Values: []any{int64(11), "pg_catalog"}},
+				{ID: 2, Values: []any{int64(2200), "public"}},
+				{ID: 3, Values: []any{int64(13183), "information_schema"}},
 			}
 		},
 	}
