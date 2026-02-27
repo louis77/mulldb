@@ -138,6 +138,7 @@ INSERT INTO <table> VALUES (<values>);  -- all columns, in order
 SELECT * FROM <table>;
 SELECT <columns> FROM <table> WHERE <condition>;
 SELECT <expr> AS <alias>, ... FROM <table>;  -- column aliases
+SELECT id, 'tag', 42 FROM <table>;          -- literals in column list
 SELECT * FROM <table> LIMIT <n>;             -- return at most n rows
 SELECT * FROM <table> OFFSET <n>;            -- skip first n rows
 SELECT * FROM <table> LIMIT <n> OFFSET <m>;  -- pagination
@@ -577,7 +578,7 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **ORDER BY / GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
 - **ALTER TABLE**
-- **Expressions in SELECT** — arithmetic like `1 + 2` is not supported; only literals and scalar functions work without `FROM`
+- **Expressions in SELECT** — arithmetic like `1 + 2` is not supported; literals and scalar functions work both with and without `FROM`
 - **Subqueries**
 - **Extended query protocol** — only SimpleQuery flow
 - **TLS/SSL** — connections are unencrypted (SSL negotiation is refused)

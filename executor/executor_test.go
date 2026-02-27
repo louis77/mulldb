@@ -906,6 +906,78 @@ func TestTraceToResult(t *testing.T) {
 	}
 }
 
+func TestExecutor_SelectLiterals(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE lit (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO lit VALUES (1, 'alice')")
+	exec(t, e, "INSERT INTO lit VALUES (2, 'bob')")
+
+	t.Run("string literal with column", func(t *testing.T) {
+		r := exec(t, e, "SELECT id, 'hello' FROM lit")
+		if len(r.Columns) != 2 {
+			t.Fatalf("columns = %d, want 2", len(r.Columns))
+		}
+		if r.Columns[1].Name != "?column?" {
+			t.Errorf("col[1].Name = %q, want ?column?", r.Columns[1].Name)
+		}
+		if len(r.Rows) != 2 {
+			t.Fatalf("rows = %d, want 2", len(r.Rows))
+		}
+		if string(r.Rows[0][1]) != "hello" {
+			t.Errorf("row[0][1] = %q, want hello", r.Rows[0][1])
+		}
+	})
+
+	t.Run("integer literal with column", func(t *testing.T) {
+		r := exec(t, e, "SELECT 42, name FROM lit WHERE id = 1")
+		if len(r.Columns) != 2 {
+			t.Fatalf("columns = %d, want 2", len(r.Columns))
+		}
+		if string(r.Rows[0][0]) != "42" {
+			t.Errorf("row[0][0] = %q, want 42", r.Rows[0][0])
+		}
+		if string(r.Rows[0][1]) != "alice" {
+			t.Errorf("row[0][1] = %q, want alice", r.Rows[0][1])
+		}
+	})
+
+	t.Run("bool literal", func(t *testing.T) {
+		r := exec(t, e, "SELECT id, true, false FROM lit WHERE id = 1")
+		if len(r.Columns) != 3 {
+			t.Fatalf("columns = %d, want 3", len(r.Columns))
+		}
+		if string(r.Rows[0][1]) != "t" {
+			t.Errorf("row[0][1] = %q, want t", r.Rows[0][1])
+		}
+		if string(r.Rows[0][2]) != "f" {
+			t.Errorf("row[0][2] = %q, want f", r.Rows[0][2])
+		}
+	})
+
+	t.Run("alias on literal", func(t *testing.T) {
+		r := exec(t, e, "SELECT 'constant' AS label, id FROM lit")
+		if r.Columns[0].Name != "label" {
+			t.Errorf("col[0].Name = %q, want label", r.Columns[0].Name)
+		}
+		if string(r.Rows[0][0]) != "constant" {
+			t.Errorf("row[0][0] = %q, want constant", r.Rows[0][0])
+		}
+	})
+
+	t.Run("literal with PK lookup", func(t *testing.T) {
+		r := exec(t, e, "SELECT id, 'found' FROM lit WHERE id = 1")
+		if len(r.Rows) != 1 {
+			t.Fatalf("rows = %d, want 1", len(r.Rows))
+		}
+		if string(r.Rows[0][0]) != "1" {
+			t.Errorf("row[0][0] = %q, want 1", r.Rows[0][0])
+		}
+		if string(r.Rows[0][1]) != "found" {
+			t.Errorf("row[0][1] = %q, want found", r.Rows[0][1])
+		}
+	})
+}
+
 func assertSQLSTATE(t *testing.T, err error, expected string) {
 	t.Helper()
 	if err == nil {

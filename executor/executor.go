@@ -254,7 +254,7 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 	}
 
 	// Resolve which columns to return.
-	colIndices, resultCols, err := resolveSelectColumns(s.Columns, def)
+	colEvals, resultCols, err := resolveSelectColumns(s.Columns, def)
 	if err != nil {
 		return nil, WrapError(err)
 	}
@@ -289,9 +289,9 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 			skip := s.Offset != nil && *s.Offset > 0
 			empty := s.Limit != nil && *s.Limit == 0
 			if !skip && !empty {
-				textRow := make([][]byte, len(colIndices))
-				for i, idx := range colIndices {
-					textRow[i] = formatValue(row.Values[idx])
+				textRow := make([][]byte, len(colEvals))
+				for i, eval := range colEvals {
+					textRow[i] = formatValue(eval(*row))
 				}
 				resultRows = [][][]byte{textRow}
 			}
@@ -348,9 +348,9 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		if limit == 0 {
 			break
 		}
-		textRow := make([][]byte, len(colIndices))
-		for i, idx := range colIndices {
-			textRow[i] = formatValue(row.Values[idx])
+		textRow := make([][]byte, len(colEvals))
+		for i, eval := range colEvals {
+			textRow[i] = formatValue(eval(row))
 		}
 		resultRows = append(resultRows, textRow)
 		if limit > 0 && int64(len(resultRows)) >= limit {
@@ -683,8 +683,8 @@ func (e *Executor) execDelete(s *parser.DeleteStmt, tr *Trace) (*Result, error) 
 // Column resolution
 // -------------------------------------------------------------------------
 
-func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]int, []Column, error) {
-	var indices []int
+func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFunc, []Column, error) {
+	var evals []exprFunc
 	var cols []Column
 
 	for _, expr := range exprs {
@@ -699,7 +699,8 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]int, []
 		switch e := inner.(type) {
 		case *parser.StarExpr:
 			for i, c := range def.Columns {
-				indices = append(indices, i)
+				idx := i
+				evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
 				cols = append(cols, Column{
 					Name:     c.Name,
 					TypeOID:  typeOID(c.DataType),
@@ -712,7 +713,7 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]int, []
 				return nil, nil, fmt.Errorf("column %q not found in table %q", e.Name, def.Name)
 			}
 			c := def.Columns[idx]
-			indices = append(indices, idx)
+			evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
 			name := c.Name
 			if alias != "" {
 				name = alias
@@ -722,11 +723,42 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]int, []
 				TypeOID:  typeOID(c.DataType),
 				TypeSize: typeSize(c.DataType),
 			})
+		case *parser.IntegerLit:
+			v := e.Value
+			evals = append(evals, func(r storage.Row) any { return v })
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: OIDInt8, TypeSize: 8})
+		case *parser.StringLit:
+			v := e.Value
+			evals = append(evals, func(r storage.Row) any { return v })
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: OIDText, TypeSize: -1})
+		case *parser.BoolLit:
+			v := e.Value
+			evals = append(evals, func(r storage.Row) any { return v })
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: OIDBool, TypeSize: 1})
+		case *parser.NullLit:
+			evals = append(evals, func(r storage.Row) any { return nil })
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: OIDUnknown, TypeSize: -1})
 		default:
 			return nil, nil, fmt.Errorf("unsupported select expression %T", inner)
 		}
 	}
-	return indices, cols, nil
+	return evals, cols, nil
 }
 
 // -------------------------------------------------------------------------
