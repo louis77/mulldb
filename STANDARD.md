@@ -187,7 +187,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| E161 | SQL comments (`--`) | Open |
+| E161 | SQL comments (`--`) | **Done** (single-line `--` and nested block `/* */` comments) |
 
 ## E171 — SQLSTATE support
 
@@ -345,9 +345,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~35 |
+| **Done** | ~36 |
 | **Partial** | ~6 |
-| **Open** | ~136 |
+| **Open** | ~135 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)

@@ -22,6 +22,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
   - [Catalog Tables](#catalog-tables)
   - [Statement Tracing](#statement-tracing)
   - [WHERE Expressions](#where-expressions)
+  - [Comments](#comments)
 - [Architecture](#architecture)
   - [Design Principles](#design-principles)
   - [Concurrency Model](#concurrency-model)
@@ -50,6 +51,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Concurrent access** — per-table locking allows concurrent writes to independent tables; multiple readers can run in parallel on any table
 - **Cleartext password authentication** — simple username/password access control
 - **Graceful shutdown** — drains active connections on SIGINT/SIGTERM
+- **SQL comments** — single-line (`--`) and nested block (`/* ... */`) comments
 - **Proper error codes** — PostgreSQL SQLSTATE codes in ErrorResponse messages
 
 ## Quick Start
@@ -502,6 +504,29 @@ SELECT * FROM t WHERE NOT (x > 5);        -- negate a comparison
 
 Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / IS [NOT] NULL → `+` `-` → `*` `/` `%` → unary `-` → primary.
 
+### Comments
+
+mulldb supports two SQL comment styles:
+
+- **Single-line comments** (`--`): everything from `--` to end of line is ignored
+- **Block comments** (`/* ... */`): delimited blocks are ignored, with nesting support (`/* outer /* inner */ outer */` is valid)
+
+Comments are treated as whitespace and can appear anywhere whitespace is allowed. Comments inside string literals or quoted identifiers are preserved as literal content.
+
+```sql
+SELECT id -- this is ignored
+FROM users;
+
+SELECT /* inline comment */ name FROM users;
+
+/* This is a
+   multi-line comment */
+SELECT 1;
+
+/* Nested /* comments */ are supported */
+SELECT 1;
+```
+
 ## Architecture
 
 ```
@@ -694,7 +719,7 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
+- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, SQL comments (`--` and `/* */` with nesting), error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
 - **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
 

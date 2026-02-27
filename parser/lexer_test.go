@@ -115,3 +115,165 @@ func TestLexerGreekIdentifier(t *testing.T) {
 		t.Fatalf("expected INT 42, got %s %q", num.Type, num.Literal)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Comment tests
+// ---------------------------------------------------------------------------
+
+func TestLexerCommentLineAtEnd(t *testing.T) {
+	l := NewLexer("SELECT 1 -- this is a comment")
+	tok := l.NextToken()
+	if tok.Type != TokenSelect {
+		t.Fatalf("expected SELECT, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "1" {
+		t.Fatalf("expected INT 1, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenEOF {
+		t.Fatalf("expected EOF, got %s %q", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexerCommentLineMidStatement(t *testing.T) {
+	l := NewLexer("SELECT -- comment\n1")
+	tok := l.NextToken()
+	if tok.Type != TokenSelect {
+		t.Fatalf("expected SELECT, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "1" {
+		t.Fatalf("expected INT 1, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenEOF {
+		t.Fatalf("expected EOF, got %s", tok.Type)
+	}
+}
+
+func TestLexerCommentBlockInline(t *testing.T) {
+	l := NewLexer("SELECT /* skip */ 1")
+	tok := l.NextToken()
+	if tok.Type != TokenSelect {
+		t.Fatalf("expected SELECT, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "1" {
+		t.Fatalf("expected INT 1, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenEOF {
+		t.Fatalf("expected EOF, got %s", tok.Type)
+	}
+}
+
+func TestLexerCommentBlockNested(t *testing.T) {
+	l := NewLexer("SELECT /* outer /* inner */ outer */ 1")
+	tok := l.NextToken()
+	if tok.Type != TokenSelect {
+		t.Fatalf("expected SELECT, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "1" {
+		t.Fatalf("expected INT 1, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenEOF {
+		t.Fatalf("expected EOF, got %s", tok.Type)
+	}
+}
+
+func TestLexerCommentInsideStringLiteral(t *testing.T) {
+	l := NewLexer("'hello -- world'")
+	tok := l.NextToken()
+	if tok.Type != TokenStrLit {
+		t.Fatalf("expected STRING, got %s", tok.Type)
+	}
+	if tok.Literal != "hello -- world" {
+		t.Fatalf("expected %q, got %q", "hello -- world", tok.Literal)
+	}
+}
+
+func TestLexerCommentBlockInsideStringLiteral(t *testing.T) {
+	l := NewLexer("'hello /* world */'")
+	tok := l.NextToken()
+	if tok.Type != TokenStrLit {
+		t.Fatalf("expected STRING, got %s", tok.Type)
+	}
+	if tok.Literal != "hello /* world */" {
+		t.Fatalf("expected %q, got %q", "hello /* world */", tok.Literal)
+	}
+}
+
+func TestLexerCommentMinusOperatorNotConfused(t *testing.T) {
+	l := NewLexer("5 - 3")
+	tok := l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "5" {
+		t.Fatalf("expected INT 5, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenMinus {
+		t.Fatalf("expected MINUS, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "3" {
+		t.Fatalf("expected INT 3, got %s %q", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexerCommentSlashOperatorNotConfused(t *testing.T) {
+	l := NewLexer("6 / 2")
+	tok := l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "6" {
+		t.Fatalf("expected INT 6, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenSlash {
+		t.Fatalf("expected SLASH, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "2" {
+		t.Fatalf("expected INT 2, got %s %q", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexerCommentUnterminatedBlock(t *testing.T) {
+	l := NewLexer("SELECT /* unterminated")
+	tok := l.NextToken()
+	if tok.Type != TokenSelect {
+		t.Fatalf("expected SELECT, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenEOF {
+		t.Fatalf("expected EOF after unterminated block comment, got %s", tok.Type)
+	}
+}
+
+func TestLexerCommentOnlyInput(t *testing.T) {
+	l := NewLexer("-- just a comment")
+	tok := l.NextToken()
+	if tok.Type != TokenEOF {
+		t.Fatalf("expected EOF, got %s %q", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexerCommentMultipleConsecutive(t *testing.T) {
+	l := NewLexer("-- first\n-- second\nSELECT")
+	tok := l.NextToken()
+	if tok.Type != TokenSelect {
+		t.Fatalf("expected SELECT, got %s %q", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexerCommentBlockMultiline(t *testing.T) {
+	l := NewLexer("SELECT /* line1\nline2\nline3 */ 1")
+	tok := l.NextToken()
+	if tok.Type != TokenSelect {
+		t.Fatalf("expected SELECT, got %s", tok.Type)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIntLit || tok.Literal != "1" {
+		t.Fatalf("expected INT 1, got %s %q", tok.Type, tok.Literal)
+	}
+}

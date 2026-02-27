@@ -128,8 +128,46 @@ func (l *Lexer) NextToken() Token {
 }
 
 func (l *Lexer) skipWhitespace() {
-	for l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
+	for {
+		for l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
+			l.advance()
+		}
+		if l.ch == '-' && l.peek() == '-' {
+			l.skipLineComment()
+			continue
+		}
+		if l.ch == '/' && l.peek() == '*' {
+			l.skipBlockComment()
+			continue
+		}
+		break
+	}
+}
+
+func (l *Lexer) skipLineComment() {
+	l.advance() // skip first -
+	l.advance() // skip second -
+	for l.ch != 0 && l.ch != '\n' {
 		l.advance()
+	}
+}
+
+func (l *Lexer) skipBlockComment() {
+	l.advance() // skip /
+	l.advance() // skip *
+	depth := 1
+	for l.ch != 0 && depth > 0 {
+		if l.ch == '/' && l.peek() == '*' {
+			l.advance()
+			l.advance()
+			depth++
+		} else if l.ch == '*' && l.peek() == '/' {
+			l.advance()
+			l.advance()
+			depth--
+		} else {
+			l.advance()
+		}
 	}
 }
 

@@ -1291,6 +1291,28 @@ func TestParse_IsNullWithAnd(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Comments (integration)
+// ---------------------------------------------------------------------------
+
+func TestParse_CommentIntegration(t *testing.T) {
+	stmt, err := Parse("SELECT /* cols */ id -- comment\nFROM users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, ok := stmt.(*SelectStmt)
+	if !ok {
+		t.Fatalf("got %T, want *SelectStmt", stmt)
+	}
+	if len(sel.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(sel.Columns))
+	}
+	assertColumnRef(t, sel.Columns[0], "id")
+	if sel.From.Name != "users" {
+		t.Errorf("from = %q, want users", sel.From.Name)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Arithmetic tokens
 // ---------------------------------------------------------------------------
 
