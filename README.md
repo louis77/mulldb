@@ -9,10 +9,13 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — write-ahead log (WAL) with CRC32 checksums and fsync for crash recovery
 - **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE
+- **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Scalar functions** — `VERSION()` and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), logical (`AND`, `OR`), parenthesized expressions
+- **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`)
+- **WAL migration** — versioned WAL format with opt-in `--migrate` flag and backup preservation
 - **Concurrent access** — single-writer / multi-reader via RWMutex, safe for multiple connections
 - **Cleartext password authentication** — simple username/password access control
 - **Graceful shutdown** — drains active connections on SIGINT/SIGTERM
@@ -41,7 +44,7 @@ psql -h 127.0.0.1 -p 5433 -U admin
 ### Try it out
 
 ```sql
-CREATE TABLE users (id INTEGER, name TEXT, active BOOLEAN);
+CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active BOOLEAN);
 
 INSERT INTO users (id, name, active) VALUES (1, 'alice', TRUE), (2, 'bob', FALSE);
 
@@ -74,6 +77,7 @@ All options can be set via CLI flags or environment variables. Environment varia
 | `--user` | `MULLDB_USER` | `admin` | Username for authentication |
 | `--password` | `MULLDB_PASSWORD` | *(empty)* | Password for authentication |
 | `--log-level` | `MULLDB_LOG_LEVEL` | `0` | Log verbosity: `0` = off, `1` = log SQL statements with outcome (`OK`/`ERROR`) and row counts |
+| `--migrate` | — | `false` | Migrate WAL file format if needed (see [WAL Migration](#wal-migration)) |
 
 Example with environment variables:
 
@@ -93,6 +97,7 @@ export MULLDB_LOG_LEVEL=1
 ```sql
 -- Create a table
 CREATE TABLE <name> (<column> <type>, ...);
+CREATE TABLE <name> (<column> <type> PRIMARY KEY, ...);  -- with primary key
 
 -- Drop a table
 DROP TABLE <name>;
@@ -275,6 +280,7 @@ Tables can be accessed with or without schema qualification. Unqualified names c
 | `pg_type` / `pg_catalog.pg_type` | `oid` (INTEGER), `typname` (TEXT) | Type information for supported data types |
 | `pg_database` / `pg_catalog.pg_database` | `datname` (TEXT) | Database names (always returns `mulldb`) |
 | `information_schema.tables` | `table_schema` (TEXT), `table_name` (TEXT), `table_type` (TEXT) | Lists all user tables and system catalog tables |
+| `information_schema.columns` | `table_schema` (TEXT), `table_name` (TEXT), `column_name` (TEXT), `ordinal_position` (INTEGER), `data_type` (TEXT), `is_nullable` (TEXT) | Column metadata for all tables |
 
 **Examples:**
 
@@ -287,6 +293,13 @@ SELECT table_name, table_type FROM information_schema.tables WHERE table_schema 
 -- ------------+------------
 --  users      | BASE TABLE
 --  orders     | BASE TABLE
+
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'users';
+--  column_name | data_type | is_nullable
+-- -------------+-----------+-------------
+--  id          | integer   | NO
+--  name        | text      | YES
+--  active      | boolean   | YES
 ```
 
 ### WHERE Expressions
@@ -321,6 +334,7 @@ psql / PG drivers
 │   (storage/)         │
 │   ├─ Catalog         │  In-memory table schemas (rebuilt from WAL)
 │   ├─ Heap            │  In-memory row data per table
+│   ├─ Index           │  B-tree indexes for primary key columns
 │   └─ WAL             │  Append-only log for crash recovery
 └─────────────────────┘
        │
@@ -354,7 +368,34 @@ Every write goes through the WAL before being applied in memory:
 4. In-memory heap is updated
 5. Lock is released
 
-On startup, `Open()` replays the WAL from the beginning, calling `OnCreateTable`, `OnInsert`, `OnDelete`, `OnUpdate` to rebuild the full in-memory state. This means the WAL is the sole source of truth — there are no separate data files.
+On startup, `Open()` replays the WAL from the beginning, calling `OnCreateTable`, `OnInsert`, `OnDelete`, `OnUpdate` to rebuild the full in-memory state (including indexes). This means the WAL is the sole source of truth — there are no separate data files.
+
+The WAL file uses a versioned binary format (`[4-byte magic "MWAL"][uint16 version][entries...]`). When the format changes between releases, the `--migrate` flag must be used to upgrade the file. See [WAL Migration](#wal-migration).
+
+## WAL Migration
+
+The WAL (write-ahead log) uses a versioned binary format. When a new release changes the format, the engine will refuse to start:
+
+```
+open storage: WAL file is format version 1 but version 2 is required; restart with --migrate flag
+```
+
+To migrate, restart with `--migrate`:
+
+```bash
+./mulldb --datadir ./data --migrate
+```
+
+The migration:
+
+1. Checks that enough disk space is available (roughly 2x the WAL file size)
+2. Writes a new WAL file in the current format
+3. Preserves the original as `data/wal.dat.bak` (or `.bak.1`, `.bak.2`, etc. if a backup already exists)
+4. Starts the engine normally
+
+After verifying the database works correctly, you can manually delete the backup file. The engine will never delete it for you.
+
+If `--migrate` is passed but no migration is needed, the engine logs an info message and starts normally.
 
 ## Project Structure
 
@@ -363,7 +404,8 @@ mulldb/
 ├── main.go                 Entry point, signal handling, wiring
 ├── go.mod
 ├── PLAN.md                 Design document
-├── CLAUDE.md               Project conventions
+├── DESIGN.md               Architecture details and WAL format
+├── CLAUDE.md               Project conventions (AI-assistant facing)
 │
 ├── config/
 │   └── config.go           CLI flags + env var parsing
@@ -382,14 +424,14 @@ mulldb/
 │   ├── lexer.go            Tokenizer (SQL → tokens)
 │   ├── ast.go              AST node types
 │   ├── parser.go           Recursive descent parser (tokens → AST)
-│   └── parser_test.go      29 parser tests
+│   └── parser_test.go
 │
 ├── executor/
 │   ├── executor.go         Query execution (AST → storage → results)
 │   ├── scalar.go           Scalar function registry and static SELECT evaluation
 │   ├── fn_version.go       VERSION() implementation (registers via init())
 │   ├── result.go           Result types, QueryError, SQLSTATE mapping
-│   └── executor_test.go    23 executor tests
+│   └── executor_test.go
 │
 ├── version/
 │   └── version.go          Build-info package; Tag/GitCommit/BuildTime set via -ldflags
@@ -398,10 +440,17 @@ mulldb/
     ├── types.go            Data types, typed errors, Engine interface
     ├── catalog.go          In-memory table schema management
     ├── heap.go             In-memory row storage per table
+    ├── compare.go          Type-aware value comparison
     ├── wal.go              Write-ahead log (write, replay, checksums)
+    ├── wal_migrate.go      WAL format migration framework
+    ├── wal_test.go         WAL migration tests
     ├── row.go              Binary row encoding/decoding
     ├── engine.go           WAL-first engine with RWMutex concurrency
-    └── engine_test.go      12 storage tests (incl. concurrency + WAL replay)
+    ├── engine_test.go
+    │
+    └── index/
+        ├── index.go        Index interface
+        └── btree.go        In-memory B-tree index implementation
 ```
 
 ## Testing
@@ -434,6 +483,7 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 | `42P07` | Duplicate table | `CREATE TABLE t (...)` when `t` exists |
 | `42703` | Undefined column | `SELECT bad_col FROM t` |
 | `22023` | Invalid parameter value | Wrong number of INSERT values |
+| `23505` | Unique violation | Inserting a duplicate primary key value |
 | `42803` | Grouping error | Mixing aggregate and non-aggregate columns |
 | `42809` | Wrong object type | `INSERT INTO pg_type ...` (catalog is read-only) |
 | `42883` | Undefined function | Unknown aggregate function or type mismatch |
@@ -442,12 +492,12 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 
 mulldb is intentionally minimal. Things it does **not** support:
 
-- **Indexes** — all queries do full table scans
+- **Secondary indexes** — only primary key columns are indexed; other columns do full table scans
+- **Multi-column primary keys** — only single-column PRIMARY KEY is supported
 - **Transactions** — no BEGIN/COMMIT/ROLLBACK
 - **JOINs** — single-table queries only
 - **ORDER BY / GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
-- **GROUP BY / HAVING** — aggregates apply to the whole table only
 - **ALTER TABLE**
 - **Expressions in SELECT** — arithmetic like `1 + 2` is not supported; only literals and scalar functions work without `FROM`
 - **Subqueries**

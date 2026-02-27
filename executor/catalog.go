@@ -22,6 +22,7 @@ func init() {
 	registerPGType()
 	registerPGDatabase()
 	registerInformationSchemaTables()
+	registerInformationSchemaColumns()
 }
 
 // registerPGType adds the pg_type catalog table.
@@ -106,6 +107,72 @@ func registerInformationSchemaTables() {
 					ID:     id,
 					Values: []any{parts[0], parts[1], "SYSTEM VIEW"},
 				})
+			}
+
+			return rows
+		},
+	}
+}
+
+// registerInformationSchemaColumns adds the information_schema.columns catalog table.
+func registerInformationSchemaColumns() {
+	catalogTables["information_schema.columns"] = &catalogTable{
+		def: &storage.TableDef{
+			Name: "columns",
+			Columns: []storage.ColumnDef{
+				{Name: "table_schema", DataType: storage.TypeText},
+				{Name: "table_name", DataType: storage.TypeText},
+				{Name: "column_name", DataType: storage.TypeText},
+				{Name: "ordinal_position", DataType: storage.TypeInteger},
+				{Name: "data_type", DataType: storage.TypeText},
+				{Name: "is_nullable", DataType: storage.TypeText},
+			},
+		},
+		rows: func(eng storage.Engine) []storage.Row {
+			var rows []storage.Row
+			var id int64
+
+			appendColumns := func(schema, tableName string, cols []storage.ColumnDef) {
+				for i, col := range cols {
+					id++
+					nullable := "YES"
+					if col.PrimaryKey {
+						nullable = "NO"
+					}
+					rows = append(rows, storage.Row{
+						ID: id,
+						Values: []any{
+							schema,
+							tableName,
+							col.Name,
+							int64(i + 1),
+							strings.ToLower(col.DataType.String()),
+							nullable,
+						},
+					})
+				}
+			}
+
+			// User tables from the storage engine.
+			if eng != nil {
+				defs := eng.ListTables()
+				sort.Slice(defs, func(i, j int) bool {
+					return defs[i].Name < defs[j].Name
+				})
+				for _, def := range defs {
+					appendColumns("public", def.Name, def.Columns)
+				}
+			}
+
+			// Catalog tables themselves.
+			var keys []string
+			for k := range catalogTables {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				parts := strings.SplitN(key, ".", 2)
+				appendColumns(parts[0], parts[1], catalogTables[key].def.Columns)
 			}
 
 			return rows

@@ -186,9 +186,10 @@ func TestCatalog_InformationSchemaTables(t *testing.T) {
 
 	// Should contain user tables + catalog tables.
 	// User tables: orders, users (sorted).
-	// Catalog tables: information_schema.tables, pg_catalog.pg_database, pg_catalog.pg_type (sorted).
-	if len(r.Rows) < 5 {
-		t.Fatalf("rows = %d, want at least 5", len(r.Rows))
+	// Catalog tables: information_schema.columns, information_schema.tables,
+	//   pg_catalog.pg_database, pg_catalog.pg_type (sorted).
+	if len(r.Rows) < 6 {
+		t.Fatalf("rows = %d, want at least 6", len(r.Rows))
 	}
 
 	// First two rows should be user tables (sorted alphabetically).
@@ -212,6 +213,79 @@ func TestCatalog_InformationSchemaTablesWherePublic(t *testing.T) {
 	}
 	if string(r.Rows[0][0]) != "t1" {
 		t.Errorf("table_name = %q, want t1", r.Rows[0][0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// information_schema.columns
+// ---------------------------------------------------------------------------
+
+func TestCatalog_InformationSchemaColumns(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active BOOLEAN)")
+
+	r := exec(t, e, "SELECT column_name, ordinal_position, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'users'")
+
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+
+	expected := []struct {
+		name     string
+		ordinal  string
+		dataType string
+		nullable string
+	}{
+		{"id", "1", "integer", "NO"},
+		{"name", "2", "text", "YES"},
+		{"active", "3", "boolean", "YES"},
+	}
+	for i, exp := range expected {
+		if string(r.Rows[i][0]) != exp.name {
+			t.Errorf("row %d column_name = %q, want %q", i, r.Rows[i][0], exp.name)
+		}
+		if string(r.Rows[i][1]) != exp.ordinal {
+			t.Errorf("row %d ordinal_position = %q, want %q", i, r.Rows[i][1], exp.ordinal)
+		}
+		if string(r.Rows[i][2]) != exp.dataType {
+			t.Errorf("row %d data_type = %q, want %q", i, r.Rows[i][2], exp.dataType)
+		}
+		if string(r.Rows[i][3]) != exp.nullable {
+			t.Errorf("row %d is_nullable = %q, want %q", i, r.Rows[i][3], exp.nullable)
+		}
+	}
+}
+
+func TestCatalog_InformationSchemaColumnsFilter(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t1 (a INTEGER, b TEXT)")
+	exec(t, e, "CREATE TABLE t2 (x INTEGER)")
+
+	r := exec(t, e, "SELECT table_name, column_name FROM information_schema.columns WHERE table_name = 't1'")
+
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][1]) != "a" {
+		t.Errorf("row 0 column_name = %q, want a", r.Rows[0][1])
+	}
+	if string(r.Rows[1][1]) != "b" {
+		t.Errorf("row 1 column_name = %q, want b", r.Rows[1][1])
+	}
+}
+
+func TestCatalog_InformationSchemaColumnsInsertReadOnly(t *testing.T) {
+	e := setup(t)
+	_, err := e.Execute("INSERT INTO information_schema.columns (table_schema, table_name, column_name) VALUES ('public', 'fake', 'col')")
+	if err == nil {
+		t.Fatal("expected error inserting into information_schema.columns")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) {
+		t.Fatalf("expected QueryError, got %T", err)
+	}
+	if qe.Code != "42809" {
+		t.Errorf("SQLSTATE = %q, want 42809", qe.Code)
 	}
 }
 
