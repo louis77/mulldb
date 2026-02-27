@@ -102,12 +102,24 @@ type DeleteStmt struct {
 	Where Expr // nil when no WHERE clause
 }
 
+// BeginStmt: BEGIN (no-op transaction start)
+type BeginStmt struct{}
+
+// CommitStmt: COMMIT (no-op transaction commit)
+type CommitStmt struct{}
+
+// RollbackStmt: ROLLBACK (no-op transaction rollback)
+type RollbackStmt struct{}
+
 func (*CreateTableStmt) statementNode() {}
 func (*DropTableStmt) statementNode()   {}
 func (*InsertStmt) statementNode()      {}
 func (*SelectStmt) statementNode()      {}
 func (*UpdateStmt) statementNode()      {}
 func (*DeleteStmt) statementNode()      {}
+func (*BeginStmt) statementNode()       {}
+func (*CommitStmt) statementNode()      {}
+func (*RollbackStmt) statementNode()    {}
 
 // ---------------------------------------------------------------------------
 // Expressions

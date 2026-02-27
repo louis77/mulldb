@@ -1282,6 +1282,34 @@ func TestExecutor_NullComparison_Equals(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// BEGIN / COMMIT / ROLLBACK (no-ops)
+// -------------------------------------------------------------------------
+
+func TestExecutor_Begin(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "BEGIN")
+	if r.Tag != "BEGIN" {
+		t.Errorf("tag = %q, want BEGIN", r.Tag)
+	}
+}
+
+func TestExecutor_Commit(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "COMMIT")
+	if r.Tag != "COMMIT" {
+		t.Errorf("tag = %q, want COMMIT", r.Tag)
+	}
+}
+
+func TestExecutor_Rollback(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "ROLLBACK")
+	if r.Tag != "ROLLBACK" {
+		t.Errorf("tag = %q, want ROLLBACK", r.Tag)
+	}
+}
+
 func TestExecutor_IsNull_UpdateDelete(t *testing.T) {
 	e := setup(t)
 	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")

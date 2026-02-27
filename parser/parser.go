@@ -77,6 +77,15 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseUpdate()
 	case TokenDelete:
 		return p.parseDelete()
+	case TokenBegin:
+		p.next()
+		return &BeginStmt{}, nil
+	case TokenCommit:
+		p.next()
+		return &CommitStmt{}, nil
+	case TokenRollback:
+		p.next()
+		return &RollbackStmt{}, nil
 	default:
 		return nil, p.unexpected()
 	}

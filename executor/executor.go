@@ -90,6 +90,21 @@ func (e *Executor) execute(sql string, tr *Trace) (*Result, error) {
 			tr.Table = s.Table.Name
 		}
 		return e.execDelete(s, tr)
+	case *parser.BeginStmt:
+		if tr != nil {
+			tr.StmtType = "BEGIN"
+		}
+		return &Result{Tag: "BEGIN"}, nil
+	case *parser.CommitStmt:
+		if tr != nil {
+			tr.StmtType = "COMMIT"
+		}
+		return &Result{Tag: "COMMIT"}, nil
+	case *parser.RollbackStmt:
+		if tr != nil {
+			tr.StmtType = "ROLLBACK"
+		}
+		return &Result{Tag: "ROLLBACK"}, nil
 	default:
 		return nil, &QueryError{Code: "42601", Message: fmt.Sprintf("unsupported statement type %T", stmt)}
 	}

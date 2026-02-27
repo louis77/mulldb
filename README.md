@@ -36,7 +36,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
-- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE
+- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Scalar functions** — `VERSION()` and a registration pattern for adding more
@@ -166,6 +166,11 @@ UPDATE <table> SET <column> = <value>;  -- all rows
 -- Delete rows
 DELETE FROM <table> WHERE <condition>;
 DELETE FROM <table>;  -- all rows
+
+-- Transaction control (accepted but no-op — every statement auto-commits)
+BEGIN;
+COMMIT;
+ROLLBACK;
 ```
 
 ### Character Encoding
@@ -626,9 +631,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, IS NULL / IS NOT NULL, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
+- **Parser**: all 9 statement types, WHERE with AND/OR/precedence, operators, IS NULL / IS NOT NULL, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NULL comparison semantics, SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NULL comparison semantics, BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 
@@ -653,7 +658,7 @@ mulldb is intentionally minimal. Things it does **not** support:
 
 - **Secondary indexes** — only primary key columns are indexed; other columns do full table scans
 - **Multi-column primary keys** — only single-column PRIMARY KEY is supported
-- **Transactions** — no BEGIN/COMMIT/ROLLBACK
+- **Transactions** — BEGIN/COMMIT/ROLLBACK are accepted but are no-ops; every statement auto-commits and there is no rollback or isolation
 - **JOINs** — single-table queries only
 - **GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)

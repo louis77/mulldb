@@ -1149,6 +1149,50 @@ func TestParse_IsNotNull(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// BEGIN / COMMIT / ROLLBACK
+// ---------------------------------------------------------------------------
+
+func TestParse_Begin(t *testing.T) {
+	stmt, err := Parse("BEGIN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stmt.(*BeginStmt); !ok {
+		t.Fatalf("got %T, want *BeginStmt", stmt)
+	}
+}
+
+func TestParse_Commit(t *testing.T) {
+	stmt, err := Parse("COMMIT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stmt.(*CommitStmt); !ok {
+		t.Fatalf("got %T, want *CommitStmt", stmt)
+	}
+}
+
+func TestParse_Rollback(t *testing.T) {
+	stmt, err := Parse("ROLLBACK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stmt.(*RollbackStmt); !ok {
+		t.Fatalf("got %T, want *RollbackStmt", stmt)
+	}
+}
+
+func TestParse_BeginSemicolon(t *testing.T) {
+	stmt, err := Parse("BEGIN;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stmt.(*BeginStmt); !ok {
+		t.Fatalf("got %T, want *BeginStmt", stmt)
+	}
+}
+
 func TestParse_IsNullWithAnd(t *testing.T) {
 	stmt, err := Parse("SELECT * FROM t WHERE a IS NULL AND b = 1")
 	if err != nil {
