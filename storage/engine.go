@@ -24,14 +24,15 @@ type engine struct {
 
 // Open creates or opens a storage engine rooted at dataDir. It replays
 // the WAL to restore state from a previous run and returns a ready-to-use
-// Engine.
-func Open(dataDir string) (Engine, error) {
+// Engine. If the WAL file needs migration and migrate is false, a
+// WALMigrationNeededError is returned.
+func Open(dataDir string, migrate bool) (Engine, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
 	walPath := filepath.Join(dataDir, "wal.dat")
-	wal, err := OpenWAL(walPath)
+	wal, err := OpenWAL(walPath, migrate)
 	if err != nil {
 		return nil, fmt.Errorf("open WAL: %w", err)
 	}
@@ -82,8 +83,7 @@ func (e *engine) OnInsert(table string, rowID int64, values []any) error {
 	if !ok {
 		return &TableNotFoundError{Name: table}
 	}
-	heap.insertWithID(rowID, values)
-	return nil
+	return heap.insertWithID(rowID, values)
 }
 
 func (e *engine) OnDelete(table string, rowIDs []int64) error {
@@ -101,7 +101,9 @@ func (e *engine) OnUpdate(table string, updates []rowUpdate) error {
 		return &TableNotFoundError{Name: table}
 	}
 	for _, u := range updates {
-		heap.updateRow(u.RowID, u.Values)
+		if err := heap.updateRow(u.RowID, u.Values); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -163,13 +165,47 @@ func (e *engine) Insert(table string, columns []string, values [][]any) (int64, 
 		return 0, &TableNotFoundError{Name: table}
 	}
 
-	var count int64
+	// Resolve all rows first so we can pre-validate PK uniqueness.
+	resolvedRows := make([][]any, 0, len(values))
 	for _, vals := range values {
 		fullRow, err := e.resolveInsertRow(heap, columns, vals)
 		if err != nil {
-			return count, err
+			return 0, err
 		}
+		resolvedRows = append(resolvedRows, fullRow)
+	}
 
+	// Pre-validate PK uniqueness for all rows before writing any WAL entries.
+	if heap.pkCol >= 0 {
+		seen := make(map[any]bool, len(resolvedRows))
+		for _, fullRow := range resolvedRows {
+			key := fullRow[heap.pkCol]
+			if key == nil {
+				return 0, &UniqueViolationError{
+					Table:  table,
+					Column: heap.def.Columns[heap.pkCol].Name,
+				}
+			}
+			if seen[key] {
+				return 0, &UniqueViolationError{
+					Table:  table,
+					Column: heap.def.Columns[heap.pkCol].Name,
+					Value:  key,
+				}
+			}
+			seen[key] = true
+			if _, exists := heap.pkIdx.Get(key); exists {
+				return 0, &UniqueViolationError{
+					Table:  table,
+					Column: heap.def.Columns[heap.pkCol].Name,
+					Value:  key,
+				}
+			}
+		}
+	}
+
+	var count int64
+	for _, fullRow := range resolvedRows {
 		id := heap.allocateID()
 		if err := e.wal.WriteInsert(table, id, fullRow); err != nil {
 			return count, fmt.Errorf("WAL: %w", err)
@@ -222,6 +258,34 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 		return 0, nil
 	}
 
+	// Pre-validate PK uniqueness before WAL write.
+	if heap.pkCol >= 0 {
+		pkColName := heap.def.Columns[heap.pkCol].Name
+		if _, changing := sets[pkColName]; changing {
+			// Collect all row IDs being updated for fast lookup.
+			updatingIDs := make(map[int64]bool, len(updates))
+			for _, u := range updates {
+				updatingIDs[u.RowID] = true
+			}
+
+			seen := make(map[any]bool, len(updates))
+			for _, u := range updates {
+				newKey := u.Values[heap.pkCol]
+				if newKey == nil {
+					return 0, &UniqueViolationError{Table: table, Column: pkColName}
+				}
+				if seen[newKey] {
+					return 0, &UniqueViolationError{Table: table, Column: pkColName, Value: newKey}
+				}
+				seen[newKey] = true
+				// Check against existing rows that are NOT being updated.
+				if existingID, found := heap.pkIdx.Get(newKey); found && !updatingIDs[existingID] {
+					return 0, &UniqueViolationError{Table: table, Column: pkColName, Value: newKey}
+				}
+			}
+		}
+	}
+
 	if err := e.wal.WriteUpdate(table, updates); err != nil {
 		return 0, fmt.Errorf("WAL: %w", err)
 	}
@@ -258,6 +322,24 @@ func (e *engine) Delete(table string, filter func(Row) bool) (int64, error) {
 	}
 	heap.deleteRows(ids)
 	return int64(len(ids)), nil
+}
+
+func (e *engine) LookupByPK(table string, value any) (*Row, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	heap, ok := e.heaps[table]
+	if !ok {
+		return nil, &TableNotFoundError{Name: table}
+	}
+	row, ok := heap.lookupByPK(value)
+	if !ok {
+		return nil, nil
+	}
+	// Return a copy to avoid data races.
+	vals := make([]any, len(row.Values))
+	copy(vals, row.Values)
+	return &Row{ID: row.ID, Values: vals}, nil
 }
 
 // -------------------------------------------------------------------------

@@ -17,7 +17,7 @@ import (
 func main() {
 	cfg := config.Parse()
 
-	eng, err := storage.Open(cfg.DataDir)
+	eng, err := storage.Open(cfg.DataDir, cfg.Migrate)
 	if err != nil {
 		log.Fatalf("open storage: %v", err)
 	}

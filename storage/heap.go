@@ -1,19 +1,28 @@
 package storage
 
+import "mulldb/storage/index"
+
 // tableHeap holds the in-memory row data for a single table.
 // It is populated during WAL replay and modified by engine operations.
 type tableHeap struct {
 	def    TableDef
 	rows   map[int64][]any // rowID → column values
 	nextID int64           // next ID to assign on insert
+	pkIdx  index.Index     // nil if no primary key
+	pkCol  int             // column index of PK, or -1
 }
 
 func newTableHeap(def TableDef) *tableHeap {
-	return &tableHeap{
+	h := &tableHeap{
 		def:    def,
 		rows:   make(map[int64][]any),
 		nextID: 1,
+		pkCol:  def.PrimaryKeyColumn(),
 	}
+	if h.pkCol >= 0 {
+		h.pkIdx = index.NewBTree(CompareValues)
+	}
+	return h
 }
 
 // allocateID reserves and returns the next row ID.
@@ -24,28 +33,92 @@ func (h *tableHeap) allocateID() int64 {
 }
 
 // insertWithID stores a row with a specific ID (used by both live inserts
-// and WAL replay).
-func (h *tableHeap) insertWithID(id int64, values []any) {
+// and WAL replay). Returns an error if the row violates a PK constraint.
+func (h *tableHeap) insertWithID(id int64, values []any) error {
+	if h.pkIdx != nil {
+		key := values[h.pkCol]
+		if key == nil {
+			return &UniqueViolationError{
+				Table:  h.def.Name,
+				Column: h.def.Columns[h.pkCol].Name,
+			}
+		}
+		if !h.pkIdx.Put(key, id) {
+			return &UniqueViolationError{
+				Table:  h.def.Name,
+				Column: h.def.Columns[h.pkCol].Name,
+				Value:  key,
+			}
+		}
+	}
 	row := make([]any, len(values))
 	copy(row, values)
 	h.rows[id] = row
 	if id >= h.nextID {
 		h.nextID = id + 1
 	}
+	return nil
 }
 
 // deleteRows removes the rows with the given IDs.
 func (h *tableHeap) deleteRows(ids []int64) {
 	for _, id := range ids {
+		if h.pkIdx != nil {
+			if vals, ok := h.rows[id]; ok {
+				h.pkIdx.Delete(vals[h.pkCol])
+			}
+		}
 		delete(h.rows, id)
 	}
 }
 
-// updateRow replaces the values for a given row ID.
-func (h *tableHeap) updateRow(id int64, values []any) {
+// updateRow replaces the values for a given row ID. Returns an error if
+// the update would violate a PK constraint.
+func (h *tableHeap) updateRow(id int64, values []any) error {
+	if h.pkIdx != nil {
+		oldVals := h.rows[id]
+		oldKey := oldVals[h.pkCol]
+		newKey := values[h.pkCol]
+		if CompareValues(oldKey, newKey) != 0 {
+			if newKey == nil {
+				return &UniqueViolationError{
+					Table:  h.def.Name,
+					Column: h.def.Columns[h.pkCol].Name,
+				}
+			}
+			// PK value is changing: remove old, try inserting new.
+			h.pkIdx.Delete(oldKey)
+			if !h.pkIdx.Put(newKey, id) {
+				// Restore old entry on failure.
+				h.pkIdx.Put(oldKey, id)
+				return &UniqueViolationError{
+					Table:  h.def.Name,
+					Column: h.def.Columns[h.pkCol].Name,
+					Value:  newKey,
+				}
+			}
+		}
+	}
 	row := make([]any, len(values))
 	copy(row, values)
 	h.rows[id] = row
+	return nil
+}
+
+// lookupByPK returns the row matching the given PK value, or false if not found.
+func (h *tableHeap) lookupByPK(value any) (*Row, bool) {
+	if h.pkIdx == nil {
+		return nil, false
+	}
+	rowID, ok := h.pkIdx.Get(value)
+	if !ok {
+		return nil, false
+	}
+	vals, ok := h.rows[rowID]
+	if !ok {
+		return nil, false
+	}
+	return &Row{ID: rowID, Values: vals}, true
 }
 
 // scan returns a RowIterator over all rows in the table.

@@ -40,8 +40,9 @@ func (r TableRef) IsEmpty() bool {
 
 // ColumnDef describes a column in a CREATE TABLE statement.
 type ColumnDef struct {
-	Name     string
-	DataType string // "INTEGER", "TEXT", or "BOOLEAN"
+	Name       string
+	DataType   string // "INTEGER", "TEXT", or "BOOLEAN"
+	PrimaryKey bool
 }
 
 // SetClause represents a single col = expr assignment in UPDATE ... SET.

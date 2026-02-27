@@ -12,6 +12,7 @@ type Config struct {
 	User     string
 	Password string
 	LogLevel int
+	Migrate  bool
 }
 
 func Parse() *Config {
@@ -21,6 +22,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.User, "user", envStr("MULLDB_USER", "admin"), "auth username")
 	flag.StringVar(&cfg.Password, "password", envStr("MULLDB_PASSWORD", ""), "auth password")
 	flag.IntVar(&cfg.LogLevel, "log-level", envInt("MULLDB_LOG_LEVEL", 0), "log verbosity (0=off, 1=SQL statements)")
+	flag.BoolVar(&cfg.Migrate, "migrate", false, "migrate WAL file format if needed")
 	flag.Parse()
 	return cfg
 }

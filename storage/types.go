@@ -26,14 +26,26 @@ func (d DataType) String() string {
 
 // ColumnDef describes a column in a table.
 type ColumnDef struct {
-	Name     string
-	DataType DataType
+	Name       string
+	DataType   DataType
+	PrimaryKey bool
 }
 
 // TableDef describes the schema of a table.
 type TableDef struct {
 	Name    string
 	Columns []ColumnDef
+}
+
+// PrimaryKeyColumn returns the index of the primary key column,
+// or -1 if the table has no primary key.
+func (d *TableDef) PrimaryKeyColumn() int {
+	for i, col := range d.Columns {
+		if col.PrimaryKey {
+			return i
+		}
+	}
+	return -1
 }
 
 // Row is a single row of data with an internal ID.
@@ -86,6 +98,18 @@ func (e *ValueCountError) Error() string {
 	return fmt.Sprintf("expected %d values, got %d", e.Expected, e.Got)
 }
 
+// UniqueViolationError is returned when an INSERT or UPDATE would
+// violate a primary key uniqueness constraint.
+type UniqueViolationError struct {
+	Table  string
+	Column string
+	Value  any
+}
+
+func (e *UniqueViolationError) Error() string {
+	return fmt.Sprintf("duplicate key value violates unique constraint on column %q of table %q", e.Column, e.Table)
+}
+
 // Engine is the storage layer interface. The executor depends on this
 // contract, never on the concrete implementation.
 type Engine interface {
@@ -97,5 +121,6 @@ type Engine interface {
 	Scan(table string) (RowIterator, error)
 	Update(table string, sets map[string]any, filter func(Row) bool) (int64, error)
 	Delete(table string, filter func(Row) bool) (int64, error)
+	LookupByPK(table string, value any) (*Row, error)
 	Close() error
 }

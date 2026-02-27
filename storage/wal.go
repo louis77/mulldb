@@ -5,7 +5,15 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log"
 	"os"
+)
+
+// WAL file header: [4-byte magic "MWAL"][uint16 version]
+const (
+	walMagic          = "MWAL"
+	walHeaderSize     = 6 // 4 (magic) + 2 (version)
+	walCurrentVersion = 2 // v1 = legacy (no PK flag), v2 = current
 )
 
 // WAL operation types.
@@ -16,6 +24,20 @@ const (
 	opDelete      byte = 4
 	opUpdate      byte = 5
 )
+
+// WALMigrationNeededError is returned when a WAL file requires migration
+// but the --migrate flag was not passed.
+type WALMigrationNeededError struct {
+	CurrentVersion  uint16
+	RequiredVersion uint16
+}
+
+func (e *WALMigrationNeededError) Error() string {
+	return fmt.Sprintf(
+		"WAL file is format version %d but version %d is required; restart with --migrate flag",
+		e.CurrentVersion, e.RequiredVersion,
+	)
+}
 
 // rowUpdate pairs a row ID with its new values for WAL update entries.
 type rowUpdate struct {
@@ -30,18 +52,106 @@ type WAL struct {
 	file *os.File
 }
 
-// OpenWAL opens (or creates) the WAL file at path.
-func OpenWAL(path string) (*WAL, error) {
+// OpenWAL opens (or creates) the WAL file at path. If the file uses an
+// older format version and migrate is true, it is migrated in place
+// (with the original preserved as a .bak file). If migrate is false and
+// the file needs migration, a WALMigrationNeededError is returned.
+func OpenWAL(path string, migrate bool) (*WAL, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
+
+	version, err := readWALVersion(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+
+	switch {
+	case version == 0:
+		// Empty file — write header and proceed.
+		if err := writeWALHeader(f); err != nil {
+			f.Close()
+			return nil, err
+		}
+	case version < walCurrentVersion:
+		f.Close()
+		if !migrate {
+			return nil, &WALMigrationNeededError{
+				CurrentVersion:  version,
+				RequiredVersion: walCurrentVersion,
+			}
+		}
+		// Migrate with explicit opt-in.
+		log.Printf("migrating WAL from version %d to %d...", version, walCurrentVersion)
+		backupPath, err := migrateWAL(path, version)
+		if err != nil {
+			return nil, fmt.Errorf("migrate WAL v%d→v%d: %w", version, walCurrentVersion, err)
+		}
+		log.Printf("WAL migration complete. Original backed up to %s", backupPath)
+		log.Printf("You can manually delete the backup once you have verified the migration.")
+		f, err = os.OpenFile(path, os.O_RDWR, 0644)
+		if err != nil {
+			return nil, err
+		}
+	case version == walCurrentVersion:
+		if migrate {
+			log.Printf("WAL is already at current version %d, no migration needed.", walCurrentVersion)
+		}
+	case version > walCurrentVersion:
+		f.Close()
+		return nil, fmt.Errorf("WAL version %d is newer than supported version %d", version, walCurrentVersion)
+	}
+
 	// Seek to end for appending new entries.
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		f.Close()
 		return nil, err
 	}
 	return &WAL{file: f}, nil
+}
+
+// readWALVersion detects the WAL format version from the file header.
+// Returns 0 for empty files, 1 for legacy headerless files, or the
+// version number from the header.
+func readWALVersion(f *os.File) (uint16, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if info.Size() == 0 {
+		return 0, nil // empty file
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return 0, err
+	}
+
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return 0, fmt.Errorf("read WAL magic: %w", err)
+	}
+
+	if string(magic[:]) != walMagic {
+		// No magic header — this is a legacy v1 file.
+		return 1, nil
+	}
+
+	var version uint16
+	if err := binary.Read(f, binary.BigEndian, &version); err != nil {
+		return 0, fmt.Errorf("read WAL version: %w", err)
+	}
+	return version, nil
+}
+
+// writeWALHeader writes the magic + version header at the current position.
+func writeWALHeader(f *os.File) error {
+	var hdr [walHeaderSize]byte
+	copy(hdr[:4], walMagic)
+	binary.BigEndian.PutUint16(hdr[4:], walCurrentVersion)
+	_, err := f.Write(hdr[:])
+	return err
 }
 
 // Close closes the WAL file.
@@ -72,6 +182,11 @@ func (w *WAL) WriteCreateTable(name string, columns []ColumnDef) error {
 	for _, col := range columns {
 		buf = encodeString(buf, col.Name)
 		buf = append(buf, byte(col.DataType))
+		var pkFlag byte
+		if col.PrimaryKey {
+			pkFlag = 1
+		}
+		buf = append(buf, pkFlag)
 	}
 	return w.writeEntry(opCreateTable, buf)
 }
@@ -123,10 +238,11 @@ type ReplayHandler interface {
 	OnUpdate(table string, updates []rowUpdate) error
 }
 
-// Replay reads the WAL from the beginning and calls handler for every
+// Replay reads the WAL from after the header and calls handler for every
 // valid entry. It returns nil on clean EOF.
 func (w *WAL) Replay(handler ReplayHandler) error {
-	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+	// Skip past the header to the first entry.
+	if _, err := w.file.Seek(walHeaderSize, io.SeekStart); err != nil {
 		return err
 	}
 
@@ -193,11 +309,12 @@ func replayCreateTable(payload []byte, h ReplayHandler) error {
 		if err != nil {
 			return err
 		}
-		if len(rest) < 1 {
-			return fmt.Errorf("truncated column type")
+		if len(rest) < 2 {
+			return fmt.Errorf("truncated column type/pk")
 		}
 		cols[i].DataType = DataType(rest[0])
-		rest = rest[1:]
+		cols[i].PrimaryKey = rest[1] != 0
+		rest = rest[2:]
 	}
 	return h.OnCreateTable(name, cols)
 }

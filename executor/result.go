@@ -73,6 +73,11 @@ func sqlstateForError(err error) string {
 		return "22023" // invalid_parameter_value
 	}
 
+	var uniqueViolation *storage.UniqueViolationError
+	if errors.As(err, &uniqueViolation) {
+		return "23505" // unique_violation
+	}
+
 	// Fallback: syntax error or general error.
 	return "42000"
 }

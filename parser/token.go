@@ -56,6 +56,8 @@ const (
 	TokenAs        // AS
 	TokenLimit     // LIMIT
 	TokenOffset    // OFFSET
+	TokenPrimary   // PRIMARY
+	TokenKey       // KEY
 )
 
 var tokenNames = map[TokenType]string{
@@ -100,6 +102,8 @@ var tokenNames = map[TokenType]string{
 	TokenAs:        "AS",
 	TokenLimit:     "LIMIT",
 	TokenOffset:    "OFFSET",
+	TokenPrimary:   "PRIMARY",
+	TokenKey:       "KEY",
 }
 
 func (t TokenType) String() string {
@@ -141,6 +145,8 @@ var keywords = map[string]TokenType{
 	"AS":      TokenAs,
 	"LIMIT":   TokenLimit,
 	"OFFSET":  TokenOffset,
+	"PRIMARY": TokenPrimary,
+	"KEY":     TokenKey,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

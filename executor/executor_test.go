@@ -19,7 +19,7 @@ func tempDir(t *testing.T) string {
 
 func setup(t *testing.T) *Executor {
 	t.Helper()
-	eng, err := storage.Open(tempDir(t))
+	eng, err := storage.Open(tempDir(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,6 +658,130 @@ func TestExecutor_SelectNegativeOffset(t *testing.T) {
 	_, err := e.Execute("SELECT * FROM t OFFSET -1")
 	if err == nil {
 		t.Fatal("expected error for negative OFFSET")
+	}
+}
+
+// -------------------------------------------------------------------------
+// Primary Key
+// -------------------------------------------------------------------------
+
+func TestExecutor_PrimaryKey_CreateInsertSelect(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice'), (2, 'bob')")
+
+	r := exec(t, e, "SELECT * FROM users")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_PrimaryKey_DuplicateInsert_23505(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice')")
+
+	_, err := e.Execute("INSERT INTO users VALUES (1, 'bob')")
+	assertSQLSTATE(t, err, "23505")
+}
+
+func TestExecutor_PrimaryKey_NullPK_23505(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+	_, err := e.Execute("INSERT INTO users VALUES (NULL, 'alice')")
+	assertSQLSTATE(t, err, "23505")
+}
+
+func TestExecutor_PrimaryKey_UpdateViolation_23505(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice'), (2, 'bob')")
+
+	_, err := e.Execute("UPDATE users SET id = 1 WHERE id = 2")
+	assertSQLSTATE(t, err, "23505")
+}
+
+func TestExecutor_PrimaryKey_IndexedLookup(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')")
+
+	// Simple equality on PK column should use the index (result should be correct).
+	r := exec(t, e, "SELECT name FROM users WHERE id = 2")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "bob" {
+		t.Errorf("name = %q, want bob", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_PrimaryKey_IndexedLookupNotFound(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice')")
+
+	r := exec(t, e, "SELECT * FROM users WHERE id = 99")
+	if len(r.Rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(r.Rows))
+	}
+}
+
+func TestExecutor_PrimaryKey_NonEqualityFallsBackToScan(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')")
+
+	// Range query — can't use PK index, falls back to scan.
+	r := exec(t, e, "SELECT * FROM users WHERE id > 3")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_PrimaryKey_DeleteAndReinsert(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice')")
+	exec(t, e, "DELETE FROM users WHERE id = 1")
+
+	// Should be able to reinsert same PK.
+	exec(t, e, "INSERT INTO users VALUES (1, 'bob')")
+
+	r := exec(t, e, "SELECT name FROM users WHERE id = 1")
+	if len(r.Rows) != 1 || string(r.Rows[0][0]) != "bob" {
+		t.Errorf("after reinsert: got %v", r.Rows)
+	}
+}
+
+func TestExecutor_PrimaryKey_TextKey(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE codes (code TEXT PRIMARY KEY, desc TEXT)")
+	exec(t, e, "INSERT INTO codes VALUES ('US', 'United States'), ('UK', 'United Kingdom')")
+
+	_, err := e.Execute("INSERT INTO codes VALUES ('US', 'duplicate')")
+	assertSQLSTATE(t, err, "23505")
+
+	r := exec(t, e, "SELECT desc FROM codes WHERE code = 'UK'")
+	if len(r.Rows) != 1 || string(r.Rows[0][0]) != "United Kingdom" {
+		t.Errorf("text PK lookup: got %v", r.Rows)
+	}
+}
+
+func TestExecutor_PrimaryKey_LimitWithIndex(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice')")
+
+	r := exec(t, e, "SELECT * FROM users WHERE id = 1 LIMIT 0")
+	if len(r.Rows) != 0 {
+		t.Fatalf("rows = %d, want 0 with LIMIT 0", len(r.Rows))
+	}
+
+	r = exec(t, e, "SELECT * FROM users WHERE id = 1 OFFSET 1")
+	if len(r.Rows) != 0 {
+		t.Fatalf("rows = %d, want 0 with OFFSET 1", len(r.Rows))
 	}
 }
 

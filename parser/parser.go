@@ -127,6 +127,18 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	if _, err := p.expect(TokenRParen); err != nil {
 		return nil, err
 	}
+
+	// Validate at most one column is marked PRIMARY KEY.
+	pkCount := 0
+	for _, col := range columns {
+		if col.PrimaryKey {
+			pkCount++
+		}
+	}
+	if pkCount > 1 {
+		return nil, fmt.Errorf("multiple primary keys are not allowed")
+	}
+
 	return &CreateTableStmt{Name: ref, Columns: columns}, nil
 }
 
@@ -150,7 +162,17 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 	}
 	p.next()
 
-	return ColumnDef{Name: name.Literal, DataType: dataType}, nil
+	// Optional PRIMARY KEY constraint.
+	var pk bool
+	if p.cur.Type == TokenPrimary {
+		p.next()
+		if _, err := p.expect(TokenKey); err != nil {
+			return ColumnDef{}, err
+		}
+		pk = true
+	}
+
+	return ColumnDef{Name: name.Literal, DataType: dataType, PrimaryKey: pk}, nil
 }
 
 func (p *parser) parseDropTable() (*DropTableStmt, error) {

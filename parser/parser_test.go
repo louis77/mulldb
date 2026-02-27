@@ -91,15 +91,39 @@ func TestParse_CreateTable(t *testing.T) {
 		t.Fatalf("columns count = %d, want 3", len(ct.Columns))
 	}
 	wantCols := []ColumnDef{
-		{"id", "INTEGER"},
-		{"name", "TEXT"},
-		{"active", "BOOLEAN"},
+		{"id", "INTEGER", false},
+		{"name", "TEXT", false},
+		{"active", "BOOLEAN", false},
 	}
 	for i, want := range wantCols {
 		got := ct.Columns[i]
 		if got != want {
 			t.Errorf("column[%d] = %+v, want %+v", i, got, want)
 		}
+	}
+}
+
+func TestParse_CreateTablePrimaryKey(t *testing.T) {
+	stmt, err := Parse("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := stmt.(*CreateTableStmt)
+	if len(ct.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(ct.Columns))
+	}
+	if !ct.Columns[0].PrimaryKey {
+		t.Error("column[0].PrimaryKey = false, want true")
+	}
+	if ct.Columns[1].PrimaryKey {
+		t.Error("column[1].PrimaryKey = true, want false")
+	}
+}
+
+func TestParse_CreateTableMultiplePKError(t *testing.T) {
+	_, err := Parse("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT PRIMARY KEY)")
+	if err == nil {
+		t.Fatal("expected error for multiple primary keys")
 	}
 }
 

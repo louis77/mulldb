@@ -56,7 +56,7 @@ func (e *Executor) execCreateTable(s *parser.CreateTableStmt) (*Result, error) {
 		if err != nil {
 			return nil, WrapError(err)
 		}
-		cols[i] = storage.ColumnDef{Name: c.Name, DataType: dt}
+		cols[i] = storage.ColumnDef{Name: c.Name, DataType: dt, PrimaryKey: c.PrimaryKey}
 	}
 	if err := e.engine.CreateTable(s.Name.Name, cols); err != nil {
 		return nil, WrapError(err)
@@ -162,6 +162,28 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		filter, err = buildFilter(s.Where, def)
 		if err != nil {
 			return nil, WrapError(err)
+		}
+	}
+
+	// Try PK index lookup for simple equality on the primary key column.
+	if !isCatalog && s.Where != nil {
+		if row, ok := e.tryPKLookup(s.Where, def); ok {
+			// Apply OFFSET/LIMIT to the single-row result.
+			var resultRows [][][]byte
+			skip := s.Offset != nil && *s.Offset > 0
+			empty := s.Limit != nil && *s.Limit == 0
+			if !skip && !empty {
+				textRow := make([][]byte, len(colIndices))
+				for i, idx := range colIndices {
+					textRow[i] = formatValue(row.Values[idx])
+				}
+				resultRows = [][][]byte{textRow}
+			}
+			return &Result{
+				Columns: resultCols,
+				Rows:    resultRows,
+				Tag:     fmt.Sprintf("SELECT %d", len(resultRows)),
+			}, nil
 		}
 	}
 
@@ -324,7 +346,7 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 				if v == nil {
 					continue
 				}
-				if !acc.hasV || compareValues(v, acc.minV) < 0 {
+				if !acc.hasV || storage.CompareValues(v, acc.minV) < 0 {
 					acc.minV = v
 					acc.hasV = true
 				}
@@ -333,7 +355,7 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 				if v == nil {
 					continue
 				}
-				if !acc.hasV || compareValues(v, acc.maxV) > 0 {
+				if !acc.hasV || storage.CompareValues(v, acc.maxV) > 0 {
 					acc.maxV = v
 					acc.hasV = true
 				}
@@ -599,27 +621,27 @@ func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, e
 			return lv || rv
 		}, nil
 	case "=":
-		return func(r storage.Row) any { return compareValues(left(r), right(r)) == 0 }, nil
+		return func(r storage.Row) any { return storage.CompareValues(left(r), right(r)) == 0 }, nil
 	case "!=":
-		return func(r storage.Row) any { return compareValues(left(r), right(r)) != 0 }, nil
+		return func(r storage.Row) any { return storage.CompareValues(left(r), right(r)) != 0 }, nil
 	case "<":
 		return func(r storage.Row) any {
-			c := compareValues(left(r), right(r))
+			c := storage.CompareValues(left(r), right(r))
 			return c != -2 && c < 0
 		}, nil
 	case ">":
 		return func(r storage.Row) any {
-			c := compareValues(left(r), right(r))
+			c := storage.CompareValues(left(r), right(r))
 			return c != -2 && c > 0
 		}, nil
 	case "<=":
 		return func(r storage.Row) any {
-			c := compareValues(left(r), right(r))
+			c := storage.CompareValues(left(r), right(r))
 			return c != -2 && c <= 0
 		}, nil
 	case ">=":
 		return func(r storage.Row) any {
-			c := compareValues(left(r), right(r))
+			c := storage.CompareValues(left(r), right(r))
 			return c != -2 && c >= 0
 		}, nil
 	default:
@@ -627,47 +649,70 @@ func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, e
 	}
 }
 
-// compareValues returns -1, 0, or 1 for ordering, or -2 if the values
-// are not comparable (e.g. NULL or type mismatch).
-func compareValues(a, b any) int {
-	if a == nil || b == nil {
-		return -2
+
+// -------------------------------------------------------------------------
+// PK index lookup
+// -------------------------------------------------------------------------
+
+// tryPKLookup checks if the WHERE expression is a simple "pk_column = literal"
+// equality and if so, performs an indexed lookup. Returns the row and true if
+// found via index, or (nil, false) if not applicable or no match.
+func (e *Executor) tryPKLookup(where parser.Expr, def *storage.TableDef) (*storage.Row, bool) {
+	pkCol := def.PrimaryKeyColumn()
+	if pkCol < 0 {
+		return nil, false
 	}
-	switch av := a.(type) {
-	case int64:
-		bv, ok := b.(int64)
-		if !ok {
-			return -2
-		}
-		switch {
-		case av < bv:
-			return -1
-		case av > bv:
-			return 1
-		default:
-			return 0
-		}
-	case string:
-		bv, ok := b.(string)
-		if !ok {
-			return -2
-		}
-		return strings.Compare(av, bv)
-	case bool:
-		bv, ok := b.(bool)
-		if !ok {
-			return -2
-		}
-		if av == bv {
-			return 0
-		}
-		if !av && bv {
-			return -1
-		}
-		return 1
-	default:
-		return -2
+
+	bin, ok := where.(*parser.BinaryExpr)
+	if !ok || bin.Op != "=" {
+		return nil, false
 	}
+
+	// Match pk_col = literal or literal = pk_col.
+	colRef, lit := extractColumnAndLiteral(bin)
+	if colRef == nil || lit == nil {
+		return nil, false
+	}
+
+	// Verify the column is the PK column.
+	if columnIndex(def, colRef.Name) != pkCol {
+		return nil, false
+	}
+
+	val, err := evalLiteral(lit)
+	if err != nil || val == nil {
+		return nil, false
+	}
+
+	row, err := e.engine.LookupByPK(def.Name, val)
+	if err != nil || row == nil {
+		return nil, false
+	}
+	return row, true
+}
+
+// extractColumnAndLiteral checks if a binary expression has a ColumnRef on one
+// side and a literal on the other. Returns (column, literal) or (nil, nil).
+func extractColumnAndLiteral(bin *parser.BinaryExpr) (*parser.ColumnRef, parser.Expr) {
+	if col, ok := bin.Left.(*parser.ColumnRef); ok {
+		if isLiteralExpr(bin.Right) {
+			return col, bin.Right
+		}
+	}
+	if col, ok := bin.Right.(*parser.ColumnRef); ok {
+		if isLiteralExpr(bin.Left) {
+			return col, bin.Left
+		}
+	}
+	return nil, nil
+}
+
+func isLiteralExpr(e parser.Expr) bool {
+	switch e.(type) {
+	case *parser.IntegerLit, *parser.StringLit, *parser.BoolLit:
+		return true
+	}
+	return false
 }
 
 // -------------------------------------------------------------------------

@@ -20,7 +20,7 @@ func tempDir(t *testing.T) string {
 
 func openEngine(t *testing.T, dir string) Engine {
 	t.Helper()
-	eng, err := Open(dir)
+	eng, err := Open(dir, false)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -453,6 +453,255 @@ func TestEngine_ConcurrentReadsAndWrites(t *testing.T) {
 	rows := collectRows(t, it)
 	if len(rows) != expectedRows {
 		t.Errorf("final rows = %d, want %d", len(rows), expectedRows)
+	}
+}
+
+// -------------------------------------------------------------------------
+// Primary Key
+// -------------------------------------------------------------------------
+
+var pkColumns = []ColumnDef{
+	{Name: "id", DataType: TypeInteger, PrimaryKey: true},
+	{Name: "name", DataType: TypeText},
+}
+
+func TestEngine_PrimaryKey_Insert(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	n, err := eng.Insert("users", nil, [][]any{
+		{int64(1), "alice"},
+		{int64(2), "bob"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("inserted %d, want 2", n)
+	}
+}
+
+func TestEngine_PrimaryKey_DuplicateInsert(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	eng.Insert("users", nil, [][]any{{int64(1), "alice"}})
+
+	_, err := eng.Insert("users", nil, [][]any{{int64(1), "bob"}})
+	if err == nil {
+		t.Fatal("expected error on duplicate PK")
+	}
+	var uv *UniqueViolationError
+	if !errors.As(err, &uv) {
+		t.Fatalf("expected UniqueViolationError, got %T: %v", err, err)
+	}
+}
+
+func TestEngine_PrimaryKey_DuplicateInBatch(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	_, err := eng.Insert("users", nil, [][]any{
+		{int64(1), "alice"},
+		{int64(1), "bob"}, // duplicate within same batch
+	})
+	if err == nil {
+		t.Fatal("expected error on duplicate PK within batch")
+	}
+	var uv *UniqueViolationError
+	if !errors.As(err, &uv) {
+		t.Fatalf("expected UniqueViolationError, got %T: %v", err, err)
+	}
+}
+
+func TestEngine_PrimaryKey_NullPK(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	_, err := eng.Insert("users", nil, [][]any{{nil, "alice"}})
+	if err == nil {
+		t.Fatal("expected error on NULL PK")
+	}
+	var uv *UniqueViolationError
+	if !errors.As(err, &uv) {
+		t.Fatalf("expected UniqueViolationError, got %T: %v", err, err)
+	}
+}
+
+func TestEngine_PrimaryKey_DeleteAndReinsert(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	eng.Insert("users", nil, [][]any{{int64(1), "alice"}})
+
+	eng.Delete("users", func(r Row) bool { return r.Values[0] == int64(1) })
+
+	// Should be able to reinsert same PK.
+	_, err := eng.Insert("users", nil, [][]any{{int64(1), "bob"}})
+	if err != nil {
+		t.Fatalf("reinsert after delete failed: %v", err)
+	}
+}
+
+func TestEngine_PrimaryKey_UpdateNonPK(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	eng.Insert("users", nil, [][]any{{int64(1), "alice"}})
+
+	// Update non-PK column should succeed.
+	n, err := eng.Update("users",
+		map[string]any{"name": "alicia"},
+		func(r Row) bool { return r.Values[0] == int64(1) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("updated %d, want 1", n)
+	}
+}
+
+func TestEngine_PrimaryKey_UpdatePKToDuplicate(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	eng.Insert("users", nil, [][]any{
+		{int64(1), "alice"},
+		{int64(2), "bob"},
+	})
+
+	_, err := eng.Update("users",
+		map[string]any{"id": int64(1)},
+		func(r Row) bool { return r.Values[0] == int64(2) },
+	)
+	if err == nil {
+		t.Fatal("expected error on PK update to duplicate value")
+	}
+	var uv *UniqueViolationError
+	if !errors.As(err, &uv) {
+		t.Fatalf("expected UniqueViolationError, got %T: %v", err, err)
+	}
+}
+
+func TestEngine_PrimaryKey_LookupByPK(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", pkColumns)
+	eng.Insert("users", nil, [][]any{
+		{int64(1), "alice"},
+		{int64(2), "bob"},
+	})
+
+	row, err := eng.LookupByPK("users", int64(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row == nil {
+		t.Fatal("expected row, got nil")
+	}
+	if row.Values[1] != "bob" {
+		t.Errorf("name = %v, want bob", row.Values[1])
+	}
+
+	// Non-existent key.
+	row, err = eng.LookupByPK("users", int64(99))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row != nil {
+		t.Errorf("expected nil for missing key, got %v", row)
+	}
+}
+
+func TestEngine_PrimaryKey_LookupByPK_NoPK(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("users", testColumns) // no PK
+	eng.Insert("users", nil, [][]any{{int64(1), "alice", true}})
+
+	row, err := eng.LookupByPK("users", int64(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row != nil {
+		t.Error("expected nil for table without PK")
+	}
+}
+
+func TestEngine_PrimaryKey_Restart(t *testing.T) {
+	dir := tempDir(t)
+
+	// First session.
+	eng := openEngine(t, dir)
+	eng.CreateTable("users", pkColumns)
+	eng.Insert("users", nil, [][]any{
+		{int64(1), "alice"},
+		{int64(2), "bob"},
+	})
+	eng.Close()
+
+	// Second session — PK enforcement should still work.
+	eng2 := openEngine(t, dir)
+	defer eng2.Close()
+
+	_, err := eng2.Insert("users", nil, [][]any{{int64(1), "dup"}})
+	if err == nil {
+		t.Fatal("expected duplicate PK error after restart")
+	}
+	var uv *UniqueViolationError
+	if !errors.As(err, &uv) {
+		t.Fatalf("expected UniqueViolationError, got %T: %v", err, err)
+	}
+
+	// Verify LookupByPK works after restart.
+	row, err := eng2.LookupByPK("users", int64(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row == nil || row.Values[1] != "bob" {
+		t.Errorf("lookup after restart: got %v, want bob", row)
+	}
+}
+
+func TestEngine_PrimaryKey_TextKey(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	cols := []ColumnDef{
+		{Name: "code", DataType: TypeText, PrimaryKey: true},
+		{Name: "desc", DataType: TypeText},
+	}
+	eng.CreateTable("codes", cols)
+	eng.Insert("codes", nil, [][]any{{"US", "United States"}, {"UK", "United Kingdom"}})
+
+	_, err := eng.Insert("codes", nil, [][]any{{"US", "duplicate"}})
+	if err == nil {
+		t.Fatal("expected error on duplicate text PK")
+	}
+
+	row, _ := eng.LookupByPK("codes", "UK")
+	if row == nil || row.Values[1] != "United Kingdom" {
+		t.Errorf("text key lookup: got %v", row)
 	}
 }
 
