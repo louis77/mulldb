@@ -58,7 +58,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | E051-05 | Select list items can be renamed (AS) | **Done** |
 | E051-06 | HAVING clause | Open |
 | E051-07 | Qualified `*` in select list (e.g. `t.*`) | Open |
-| E051-08 | Correlation names in the FROM clause | Open |
+| E051-08 | Correlation names in the FROM clause | **Done** (table aliases in FROM and JOIN clauses) |
 | E051-09 | Rename columns in the FROM clause | Open |
 
 ## E061 — Basic predicates and search conditions
@@ -228,13 +228,13 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| F041-01 | Inner join (but not necessarily the INNER keyword) | Open |
-| F041-02 | INNER keyword | Open |
+| F041-01 | Inner join (but not necessarily the INNER keyword) | **Done** (JOIN ... ON with nested-loop execution, table aliases, qualified column refs) |
+| F041-02 | INNER keyword | **Done** (INNER JOIN accepted as alias for JOIN) |
 | F041-03 | LEFT OUTER JOIN | Open |
 | F041-04 | RIGHT OUTER JOIN | Open |
 | F041-05 | Outer joins can be nested | Open |
 | F041-07 | Inner table in left or right outer join can also be used in inner join | Open |
-| F041-08 | All comparison operators are supported (in join conditions) | Open |
+| F041-08 | All comparison operators are supported (in join conditions) | **Done** (all 6 comparison operators work in ON and WHERE for joins) |
 
 ## F051 — Basic date and time
 
@@ -345,9 +345,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~38 |
+| **Done** | ~42 |
 | **Partial** | ~6 |
-| **Open** | ~133 |
+| **Open** | ~129 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
@@ -355,6 +355,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 - Identifiers (delimited and case-insensitive)
 - Aggregate functions (COUNT, SUM, MIN, MAX)
 - ORDER BY (single/multi-column, ASC/DESC, NULLs last)
+- INNER JOIN (with table aliases, qualified column references, nested-loop execution)
 - Information schema (TABLES, COLUMNS views)
 - SQLSTATE error codes
 - Wire protocol compatibility (host language binding)
@@ -363,7 +364,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 1. **Predicates**: BETWEEN, IN, LIKE
 2. **Expressions**: CASE, CAST, COALESCE (arithmetic is done)
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
-4. **JOINs**: No multi-table queries yet
+4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet
 5. **Transactions**: No BEGIN / COMMIT / ROLLBACK
 6. **Data types**: No floating-point, decimal, or date/time types
 7. **Constraints**: No UNIQUE, FOREIGN KEY, CHECK, DEFAULT

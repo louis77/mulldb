@@ -298,12 +298,47 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	}
 
 	var from TableRef
+	var fromAlias string
+	var joins []JoinClause
 	var err error
 	if p.cur.Type == TokenFrom {
 		p.next() // consume FROM
 		from, err = p.parseTableRef()
 		if err != nil {
 			return nil, err
+		}
+		// Optional alias for FROM table.
+		if p.cur.Type == TokenIdent && !isSelectClauseKeyword(p.cur.Literal) {
+			fromAlias = p.cur.Literal
+			p.next()
+		}
+		// Parse JOIN clauses.
+		for p.cur.Type == TokenJoin || p.cur.Type == TokenInner {
+			if p.cur.Type == TokenInner {
+				p.next() // consume INNER
+				if _, err := p.expect(TokenJoin); err != nil {
+					return nil, err
+				}
+			} else {
+				p.next() // consume JOIN
+			}
+			joinRef, err := p.parseTableRef()
+			if err != nil {
+				return nil, err
+			}
+			var joinAlias string
+			if p.cur.Type == TokenIdent && !isSelectClauseKeyword(p.cur.Literal) {
+				joinAlias = p.cur.Literal
+				p.next()
+			}
+			if _, err := p.expect(TokenOn); err != nil {
+				return nil, err
+			}
+			onExpr, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			joins = append(joins, JoinClause{Table: joinRef, Alias: joinAlias, On: onExpr})
 		}
 	}
 
@@ -329,6 +364,16 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 				return nil, err
 			}
 			clause := OrderByClause{Column: col.Literal}
+			// Check for qualified name: table.column
+			if p.cur.Type == TokenDot {
+				p.next() // consume dot
+				second, err := p.expect(TokenIdent)
+				if err != nil {
+					return nil, err
+				}
+				clause.Table = clause.Column
+				clause.Column = second.Literal
+			}
 			if p.cur.Type == TokenDesc {
 				clause.Desc = true
 				p.next()
@@ -373,7 +418,27 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
-	return &SelectStmt{Columns: columns, From: from, Where: where, OrderBy: orderBy, Limit: limit, Offset: offset}, nil
+	return &SelectStmt{
+		Columns:   columns,
+		From:      from,
+		FromAlias: fromAlias,
+		Joins:     joins,
+		Where:     where,
+		OrderBy:   orderBy,
+		Limit:     limit,
+		Offset:    offset,
+	}, nil
+}
+
+// isSelectClauseKeyword returns true if the identifier (case-insensitive) is a
+// keyword that starts a SELECT clause, and thus should not be consumed as an alias.
+func isSelectClauseKeyword(ident string) bool {
+	switch strings.ToUpper(ident) {
+	case "WHERE", "ORDER", "LIMIT", "OFFSET", "JOIN", "INNER", "ON",
+		"LEFT", "RIGHT", "OUTER", "CROSS", "FULL", "GROUP", "HAVING":
+		return true
+	}
+	return false
 }
 
 func (p *parser) parseUpdate() (*UpdateStmt, error) {
@@ -619,6 +684,18 @@ func (p *parser) parsePrimary() (Expr, error) {
 	case TokenIdent:
 		name := p.cur.Literal
 		p.next()
+		// Check for qualified name: table.column or table.func()
+		if p.cur.Type == TokenDot {
+			p.next() // consume dot
+			second, err := p.expect(TokenIdent)
+			if err != nil {
+				return nil, err
+			}
+			if p.cur.Type == TokenLParen {
+				return nil, fmt.Errorf("qualified function calls are not supported at position %d", p.cur.Pos)
+			}
+			return &ColumnRef{Table: name, Name: second.Literal}, nil
+		}
 		if p.cur.Type != TokenLParen {
 			return &ColumnRef{Name: name}, nil
 		}

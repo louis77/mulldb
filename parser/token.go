@@ -67,6 +67,9 @@ const (
 	TokenAsc       // ASC
 	TokenDesc      // DESC
 	TokenIs        // IS
+	TokenJoin      // JOIN
+	TokenInner     // INNER
+	TokenOn        // ON
 	TokenBegin     // BEGIN
 	TokenCommit    // COMMIT
 	TokenRollback  // ROLLBACK
@@ -125,6 +128,9 @@ var tokenNames = map[TokenType]string{
 	TokenAsc:       "ASC",
 	TokenDesc:      "DESC",
 	TokenIs:        "IS",
+	TokenJoin:      "JOIN",
+	TokenInner:     "INNER",
+	TokenOn:        "ON",
 	TokenBegin:     "BEGIN",
 	TokenCommit:    "COMMIT",
 	TokenRollback:  "ROLLBACK",
@@ -179,6 +185,9 @@ var keywords = map[string]TokenType{
 	"ASC":     TokenAsc,
 	"DESC":    TokenDesc,
 	"IS":       TokenIs,
+	"JOIN":     TokenJoin,
+	"INNER":    TokenInner,
+	"ON":       TokenOn,
 	"BEGIN":    TokenBegin,
 	"COMMIT":   TokenCommit,
 	"ROLLBACK": TokenRollback,

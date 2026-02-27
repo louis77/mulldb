@@ -222,6 +222,11 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		return execSelectStatic(s.Columns)
 	}
 
+	// Branch to join execution if joins are present.
+	if len(s.Joins) > 0 {
+		return e.execSelectJoin(s, tr)
+	}
+
 	var planStart time.Time
 	if tr != nil {
 		planStart = time.Now()
@@ -695,6 +700,616 @@ func execSelectStatic(exprs []parser.Expr) (*Result, error) {
 	}, nil
 }
 
+
+// -------------------------------------------------------------------------
+// JOIN execution
+// -------------------------------------------------------------------------
+
+// scopeTable represents one table in a join scope.
+type scopeTable struct {
+	name   string           // original table name
+	alias  string           // alias (or name if no alias)
+	def    *storage.TableDef
+	offset int              // index into merged row where this table's columns start
+}
+
+// scopeColumn represents one column in the merged join row.
+type scopeColumn struct {
+	tableIdx int    // index into joinScope.tables
+	colIdx   int    // index into that table's Columns
+	name     string
+	def      storage.ColumnDef
+}
+
+// joinScope represents the merged column layout for a join.
+type joinScope struct {
+	columns []scopeColumn
+	tables  []scopeTable
+}
+
+// resolveColumn finds a column in the scope by optional table qualifier and name.
+// Returns the merged row index or an error.
+func (s *joinScope) resolveColumn(table, name string) (int, error) {
+	if table != "" {
+		// Find the matching table by alias (or name).
+		tableIdx := -1
+		for i, t := range s.tables {
+			if strings.EqualFold(t.alias, table) {
+				tableIdx = i
+				break
+			}
+		}
+		if tableIdx < 0 {
+			return -1, fmt.Errorf("table %q not found in FROM clause", table)
+		}
+		// Find column within that table.
+		for i, c := range s.columns {
+			if c.tableIdx == tableIdx && strings.EqualFold(c.name, name) {
+				return i, nil
+			}
+		}
+		return -1, fmt.Errorf("column %q not found in table %q", name, table)
+	}
+	// Unqualified: search all tables.
+	found := -1
+	for i, c := range s.columns {
+		if strings.EqualFold(c.name, name) {
+			if found >= 0 {
+				return -1, fmt.Errorf("column reference %q is ambiguous", name)
+			}
+			found = i
+		}
+	}
+	if found < 0 {
+		return -1, fmt.Errorf("column %q not found", name)
+	}
+	return found, nil
+}
+
+// buildJoinScope creates a joinScope from the FROM table and all JOIN tables.
+func (e *Executor) buildJoinScope(s *parser.SelectStmt) (*joinScope, error) {
+	scope := &joinScope{}
+	offset := 0
+
+	// FROM table.
+	def, ok := e.engine.GetTable(s.From.Name)
+	if !ok {
+		return nil, &storage.TableNotFoundError{Name: s.From.String()}
+	}
+	alias := s.FromAlias
+	if alias == "" {
+		alias = s.From.Name
+	}
+	scope.tables = append(scope.tables, scopeTable{
+		name: s.From.Name, alias: alias, def: def, offset: offset,
+	})
+	for i, c := range def.Columns {
+		scope.columns = append(scope.columns, scopeColumn{
+			tableIdx: 0, colIdx: i, name: c.Name, def: c,
+		})
+	}
+	offset += len(def.Columns)
+
+	// JOIN tables.
+	for ji, j := range s.Joins {
+		jdef, ok := e.engine.GetTable(j.Table.Name)
+		if !ok {
+			return nil, &storage.TableNotFoundError{Name: j.Table.String()}
+		}
+		jalias := j.Alias
+		if jalias == "" {
+			jalias = j.Table.Name
+		}
+		tableIdx := ji + 1
+		scope.tables = append(scope.tables, scopeTable{
+			name: j.Table.Name, alias: jalias, def: jdef, offset: offset,
+		})
+		for i, c := range jdef.Columns {
+			scope.columns = append(scope.columns, scopeColumn{
+				tableIdx: tableIdx, colIdx: i, name: c.Name, def: c,
+			})
+		}
+		offset += len(jdef.Columns)
+	}
+
+	return scope, nil
+}
+
+// compileJoinExpr compiles an expression against a join scope.
+func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
+	switch e := expr.(type) {
+	case *parser.ColumnRef:
+		idx, err := scope.resolveColumn(e.Table, e.Name)
+		if err != nil {
+			return nil, err
+		}
+		return func(r storage.Row) any { return r.Values[idx] }, nil
+
+	case *parser.IntegerLit:
+		v := e.Value
+		return func(storage.Row) any { return v }, nil
+
+	case *parser.StringLit:
+		v := e.Value
+		return func(storage.Row) any { return v }, nil
+
+	case *parser.BoolLit:
+		v := e.Value
+		return func(storage.Row) any { return v }, nil
+
+	case *parser.NullLit:
+		return func(storage.Row) any { return nil }, nil
+
+	case *parser.BinaryExpr:
+		return compileJoinBinaryExpr(e, scope)
+
+	case *parser.IsNullExpr:
+		inner, err := compileJoinExpr(e.Expr, scope)
+		if err != nil {
+			return nil, err
+		}
+		if e.Not {
+			return func(r storage.Row) any { return inner(r) != nil }, nil
+		}
+		return func(r storage.Row) any { return inner(r) == nil }, nil
+
+	case *parser.UnaryExpr:
+		inner, err := compileJoinExpr(e.Expr, scope)
+		if err != nil {
+			return nil, err
+		}
+		return func(r storage.Row) any {
+			v := inner(r)
+			if v == nil {
+				return nil
+			}
+			iv, ok := v.(int64)
+			if !ok {
+				return nil
+			}
+			return -iv
+		}, nil
+
+	case *parser.NotExpr:
+		inner, err := compileJoinExpr(e.Expr, scope)
+		if err != nil {
+			return nil, err
+		}
+		return func(r storage.Row) any {
+			v, ok := inner(r).(bool)
+			if !ok {
+				return nil
+			}
+			return !v
+		}, nil
+
+	case *parser.FunctionCallExpr:
+		fn, ok := scalarRegistry[e.Name]
+		if !ok {
+			return nil, fmt.Errorf("function %s() does not exist", strings.ToLower(e.Name))
+		}
+		argEvals := make([]exprFunc, len(e.Args))
+		for i, arg := range e.Args {
+			compiled, err := compileJoinExpr(arg, scope)
+			if err != nil {
+				return nil, err
+			}
+			argEvals[i] = compiled
+		}
+		return func(r storage.Row) any {
+			args := make([]any, len(argEvals))
+			for i, eval := range argEvals {
+				args[i] = eval(r)
+			}
+			val, _, err := fn(args)
+			if err != nil {
+				return nil
+			}
+			return val
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported expression type %T in join", expr)
+	}
+}
+
+func compileJoinBinaryExpr(e *parser.BinaryExpr, scope *joinScope) (exprFunc, error) {
+	left, err := compileJoinExpr(e.Left, scope)
+	if err != nil {
+		return nil, err
+	}
+	right, err := compileJoinExpr(e.Right, scope)
+	if err != nil {
+		return nil, err
+	}
+
+	switch e.Op {
+	case "AND":
+		return func(r storage.Row) any {
+			lv, lok := left(r).(bool)
+			rv, rok := right(r).(bool)
+			if !lok || !rok {
+				return nil
+			}
+			return lv && rv
+		}, nil
+	case "OR":
+		return func(r storage.Row) any {
+			lv, lok := left(r).(bool)
+			rv, rok := right(r).(bool)
+			if !lok || !rok {
+				return nil
+			}
+			return lv || rv
+		}, nil
+	case "=":
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c == 0
+		}, nil
+	case "!=":
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c != 0
+		}, nil
+	case "<":
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c < 0
+		}, nil
+	case ">":
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c > 0
+		}, nil
+	case "<=":
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c <= 0
+		}, nil
+	case ">=":
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c >= 0
+		}, nil
+	case "+", "-", "*", "/", "%":
+		op := e.Op
+		return func(r storage.Row) any {
+			lv, rv := left(r), right(r)
+			if lv == nil || rv == nil {
+				return nil
+			}
+			li, lok := lv.(int64)
+			ri, rok := rv.(int64)
+			if !lok || !rok {
+				return nil
+			}
+			switch op {
+			case "+":
+				return li + ri
+			case "-":
+				return li - ri
+			case "*":
+				return li * ri
+			case "/":
+				if ri == 0 {
+					return nil
+				}
+				return li / ri
+			case "%":
+				if ri == 0 {
+					return nil
+				}
+				return li % ri
+			}
+			return nil
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported operator %q", e.Op)
+	}
+}
+
+// buildJoinFilter compiles an expression into a row filter for joined rows.
+func buildJoinFilter(expr parser.Expr, scope *joinScope) (func(storage.Row) bool, error) {
+	eval, err := compileJoinExpr(expr, scope)
+	if err != nil {
+		return nil, err
+	}
+	return func(r storage.Row) bool {
+		v := eval(r)
+		b, ok := v.(bool)
+		return ok && b
+	}, nil
+}
+
+// resolveJoinSelectColumns resolves SELECT column expressions against a join scope.
+func resolveJoinSelectColumns(exprs []parser.Expr, scope *joinScope) ([]exprFunc, []Column, error) {
+	var evals []exprFunc
+	var cols []Column
+
+	for _, expr := range exprs {
+		alias := ""
+		inner := expr
+		if a, ok := inner.(*parser.AliasExpr); ok {
+			alias = a.Alias
+			inner = a.Expr
+		}
+
+		switch e := inner.(type) {
+		case *parser.StarExpr:
+			for i, c := range scope.columns {
+				idx := i
+				evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
+				cols = append(cols, Column{
+					Name:     c.name,
+					TypeOID:  typeOID(c.def.DataType),
+					TypeSize: typeSize(c.def.DataType),
+				})
+			}
+		case *parser.ColumnRef:
+			idx, err := scope.resolveColumn(e.Table, e.Name)
+			if err != nil {
+				return nil, nil, err
+			}
+			c := scope.columns[idx]
+			evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
+			name := c.name
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{
+				Name:     name,
+				TypeOID:  typeOID(c.def.DataType),
+				TypeSize: typeSize(c.def.DataType),
+			})
+		default:
+			compiled, err := compileJoinExpr(inner, scope)
+			if err != nil {
+				return nil, nil, err
+			}
+			evals = append(evals, compiled)
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: OIDUnknown, TypeSize: -1})
+		}
+	}
+	return evals, cols, nil
+}
+
+// execSelectJoin handles SELECT with JOIN clauses using nested-loop execution.
+func (e *Executor) execSelectJoin(s *parser.SelectStmt, tr *Trace) (*Result, error) {
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
+	}
+
+	// Validate LIMIT/OFFSET values.
+	if s.Limit != nil && *s.Limit < 0 {
+		return nil, &QueryError{Code: "2201W", Message: "LIMIT must not be negative"}
+	}
+	if s.Offset != nil && *s.Offset < 0 {
+		return nil, &QueryError{Code: "2201X", Message: "OFFSET must not be negative"}
+	}
+
+	// Build the join scope.
+	scope, err := e.buildJoinScope(s)
+	if err != nil {
+		return nil, WrapError(err)
+	}
+
+	// Compile ON conditions for each join.
+	onFilters := make([]func(storage.Row) bool, len(s.Joins))
+	for i, j := range s.Joins {
+		f, err := buildJoinFilter(j.On, scope)
+		if err != nil {
+			return nil, WrapError(err)
+		}
+		onFilters[i] = f
+	}
+
+	// Compile WHERE filter.
+	var whereFilter func(storage.Row) bool
+	if s.Where != nil {
+		whereFilter, err = buildJoinFilter(s.Where, scope)
+		if err != nil {
+			return nil, WrapError(err)
+		}
+	}
+
+	// Resolve SELECT columns.
+	colEvals, resultCols, err := resolveJoinSelectColumns(s.Columns, scope)
+	if err != nil {
+		return nil, WrapError(err)
+	}
+
+	// Resolve ORDER BY columns against scope.
+	type orderKey struct {
+		colIdx int
+		desc   bool
+	}
+	var orderKeys []orderKey
+	for _, ob := range s.OrderBy {
+		idx, err := scope.resolveColumn(ob.Table, ob.Column)
+		if err != nil {
+			return nil, WrapError(err)
+		}
+		orderKeys = append(orderKeys, orderKey{colIdx: idx, desc: ob.Desc})
+	}
+
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
+	// Collect all rows from each table.
+	tableRows := make([][]storage.Row, len(scope.tables))
+	var scanned int64
+	for i, t := range scope.tables {
+		it, err := e.engine.Scan(t.name)
+		if err != nil {
+			return nil, WrapError(err)
+		}
+		var rows []storage.Row
+		for {
+			row, ok := it.Next()
+			if !ok {
+				break
+			}
+			rows = append(rows, row)
+			scanned++
+		}
+		it.Close()
+		tableRows[i] = rows
+	}
+
+	// Nested-loop join: build merged rows.
+	var joinLoopStart time.Time
+	if tr != nil {
+		joinLoopStart = time.Now()
+	}
+
+	var matched []storage.Row
+	totalCols := len(scope.columns)
+
+	// Recursive function for N-way join.
+	var joinLoop func(tableIdx int, current []any)
+	joinLoop = func(tableIdx int, current []any) {
+		if tableIdx >= len(scope.tables) {
+			// All tables joined — we have a complete merged row.
+			merged := storage.Row{Values: make([]any, totalCols)}
+			copy(merged.Values, current)
+
+			// Apply ON conditions for all joins.
+			for _, onFilter := range onFilters {
+				if !onFilter(merged) {
+					return
+				}
+			}
+
+			// Apply WHERE filter.
+			if whereFilter != nil && !whereFilter(merged) {
+				return
+			}
+
+			matched = append(matched, merged)
+			return
+		}
+
+		offset := scope.tables[tableIdx].offset
+		numCols := len(scope.tables[tableIdx].def.Columns)
+		for _, row := range tableRows[tableIdx] {
+			// Place this table's values into the merged row.
+			for j := 0; j < numCols; j++ {
+				current[offset+j] = row.Values[j]
+			}
+			joinLoop(tableIdx+1, current)
+		}
+	}
+
+	working := make([]any, totalCols)
+	joinLoop(0, working)
+
+	if tr != nil {
+		tr.JoinLoop = time.Since(joinLoopStart)
+	}
+
+	// Apply ORDER BY.
+	if len(orderKeys) > 0 {
+		var sortStart time.Time
+		if tr != nil {
+			sortStart = time.Now()
+		}
+		sort.SliceStable(matched, func(i, j int) bool {
+			for _, key := range orderKeys {
+				av := matched[i].Values[key.colIdx]
+				bv := matched[j].Values[key.colIdx]
+				if av == nil && bv == nil {
+					continue
+				}
+				if av == nil {
+					return false
+				}
+				if bv == nil {
+					return true
+				}
+				cmp := storage.CompareValues(av, bv)
+				if cmp == 0 {
+					continue
+				}
+				if key.desc {
+					return cmp > 0
+				}
+				return cmp < 0
+			}
+			return false
+		})
+		if tr != nil {
+			tr.Sort = time.Since(sortStart)
+		}
+	}
+
+	// Apply OFFSET.
+	start := int64(0)
+	if s.Offset != nil {
+		start = *s.Offset
+	}
+	if start > int64(len(matched)) {
+		start = int64(len(matched))
+	}
+
+	// Apply LIMIT.
+	end := int64(len(matched))
+	if s.Limit != nil && start+*s.Limit < end {
+		end = start + *s.Limit
+	}
+
+	// Build result rows.
+	var resultRows [][][]byte
+	for _, row := range matched[start:end] {
+		textRow := make([][]byte, len(colEvals))
+		for i, eval := range colEvals {
+			textRow[i] = formatValue(eval(row))
+		}
+		resultRows = append(resultRows, textRow)
+	}
+
+	if tr != nil {
+		tr.RowsScanned = scanned
+		tr.RowsReturned = int64(len(resultRows))
+		tr.Exec = time.Since(execStart)
+	}
+
+	return &Result{
+		Columns: resultCols,
+		Rows:    resultRows,
+		Tag:     fmt.Sprintf("SELECT %d", len(resultRows)),
+	}, nil
+}
 
 func (e *Executor) execUpdate(s *parser.UpdateStmt, tr *Trace) (*Result, error) {
 	if isCatalogTable(s.Table.Schema, s.Table.Name) {

@@ -16,6 +16,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
   - [Aggregate Functions](#aggregate-functions)
   - [Column Aliases (AS)](#column-aliases-as)
   - [ORDER BY](#order-by)
+  - [INNER JOIN](#inner-join)
   - [LIMIT and OFFSET](#limit-and-offset)
   - [Arithmetic Expressions](#arithmetic-expressions)
   - [Scalar Functions](#scalar-functions)
@@ -38,7 +39,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
-- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, and column aliases via AS), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
+- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `VERSION()`, and a registration pattern for adding more
@@ -146,6 +147,8 @@ SELECT <expr> AS <alias>, ... FROM <table>;  -- column aliases
 SELECT id, 'tag', 42 FROM <table>;          -- literals in column list
 SELECT * FROM <table> ORDER BY <col> [ASC|DESC], ...;  -- sorted results
 SELECT * FROM <table> ORDER BY <col> LIMIT <n>;       -- sorted + limited
+SELECT <cols> FROM <t1> JOIN <t2> ON <condition>;            -- inner join
+SELECT <cols> FROM <t1> a INNER JOIN <t2> b ON a.id = b.fk;  -- with aliases
 SELECT * FROM <table> LIMIT <n>;             -- return at most n rows
 SELECT * FROM <table> OFFSET <n>;            -- skip first n rows
 SELECT * FROM <table> LIMIT <n> OFFSET <m>;  -- pagination
@@ -313,6 +316,43 @@ SELECT * FROM scores ORDER BY score LIMIT 2 OFFSET 1;
 -- ----+---------+-------
 --   1 | alice   |    90
 --   3 | charlie |    90
+```
+
+### INNER JOIN
+
+`JOIN` (or `INNER JOIN`) combines rows from two or more tables based on a related column. Only rows that satisfy the `ON` condition are included in the result. Tables can be aliased for shorter qualified column references (`table.column`).
+
+Unqualified column names work if the column name is unique across all joined tables. If it appears in multiple tables, qualify it with the table name or alias.
+
+Multiple joins can be chained: `FROM t1 JOIN t2 ON ... JOIN t3 ON ...`
+
+**Examples:**
+
+```sql
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT);
+INSERT INTO orders VALUES (1, 'alice'), (2, 'bob');
+
+CREATE TABLE items (id INTEGER PRIMARY KEY, order_id INTEGER, product TEXT, qty INTEGER);
+INSERT INTO items VALUES (10, 1, 'widget', 5), (11, 1, 'gadget', 3), (12, 2, 'widget', 1);
+
+SELECT o.id, o.customer, i.product, i.qty
+FROM orders o
+JOIN items i ON o.id = i.order_id;
+--  id | customer | product | qty
+-- ----+----------+---------+-----
+--   1 | alice    | widget  |   5
+--   1 | alice    | gadget  |   3
+--   2 | bob      | widget  |   1
+
+SELECT o.id, i.product
+FROM orders o
+INNER JOIN items i ON o.id = i.order_id
+WHERE i.qty > 1
+ORDER BY i.product;
+--  id | product
+-- ----+---------
+--   1 | gadget
+--   1 | widget
 ```
 
 ### LIMIT and OFFSET
@@ -508,6 +548,26 @@ SHOW TRACE;
 --  Rows Scanned  | 1
 --  Rows Returned | 1
 --  Used Index    | true
+```
+
+For JOIN queries, the trace includes additional timing:
+
+```sql
+SET trace = on;
+SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id ORDER BY o.id;
+SHOW TRACE;
+--  step          | duration
+-- ---------------+----------
+--  Parse         | 18.3µs
+--  Plan          | 5.1µs
+--  Execute       | 42.7µs
+--  Sort          | 2.4µs
+--  Join Loop     | 31.5µs
+--  Total         | 66.1µs
+--  Statement     | SELECT
+--  Table         | orders
+--  Rows Scanned  | 6
+--  Rows Returned | 3
 ```
 
 ### WHERE Expressions
@@ -750,9 +810,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, SQL comments (`--` and `/* */` with nesting), error cases
+- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, INNER JOIN (with aliases, qualified columns, multi-join), optional FROM clause, UTF-8 identifiers and string literals, SQL comments (`--` and `/* */` with nesting), error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, INNER JOIN (basic, aliases, WHERE filter, empty result, SELECT *, ambiguous column errors, ORDER BY, LIMIT/OFFSET), BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 
@@ -779,7 +839,7 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **Secondary indexes** — only primary key columns are indexed; other columns do full table scans
 - **Multi-column primary keys** — only single-column PRIMARY KEY is supported
 - **Transactions** — BEGIN/COMMIT/ROLLBACK are accepted but are no-ops; every statement auto-commits and there is no rollback or isolation
-- **JOINs** — single-table queries only
+- **LEFT/RIGHT/FULL OUTER JOINs** — only INNER JOIN is supported
 - **GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
 - **ALTER TABLE**

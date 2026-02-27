@@ -73,20 +73,30 @@ type InsertStmt struct {
 	Values  [][]Expr
 }
 
+// JoinClause represents a single JOIN in a SELECT statement.
+type JoinClause struct {
+	Table TableRef
+	Alias string // "" when no alias
+	On    Expr   // join condition
+}
+
 // OrderByClause represents a single column in an ORDER BY clause.
 type OrderByClause struct {
+	Table  string // "" when unqualified
 	Column string // column name
 	Desc   bool   // true = DESC, false = ASC (default)
 }
 
-// SelectStmt: SELECT <cols> FROM <table> [WHERE <expr>] [ORDER BY ...] [LIMIT n] [OFFSET n]
+// SelectStmt: SELECT <cols> FROM <table> [JOIN ...] [WHERE <expr>] [ORDER BY ...] [LIMIT n] [OFFSET n]
 type SelectStmt struct {
-	Columns []Expr // StarExpr for *, ColumnRef for named columns
-	From    TableRef
-	Where   Expr             // nil when no WHERE clause
-	OrderBy []OrderByClause  // nil when no ORDER BY clause
-	Limit   *int64           // nil = no limit
-	Offset  *int64           // nil = no offset
+	Columns   []Expr // StarExpr for *, ColumnRef for named columns
+	From      TableRef
+	FromAlias string          // "" when no alias
+	Joins     []JoinClause    // nil when no joins
+	Where     Expr            // nil when no WHERE clause
+	OrderBy   []OrderByClause // nil when no ORDER BY clause
+	Limit     *int64          // nil = no limit
+	Offset    *int64          // nil = no offset
 }
 
 // UpdateStmt: UPDATE <table> SET <sets> [WHERE <expr>]
@@ -125,9 +135,10 @@ func (*RollbackStmt) statementNode()    {}
 // Expressions
 // ---------------------------------------------------------------------------
 
-// ColumnRef references a column by name.
+// ColumnRef references a column by name, optionally qualified with a table name/alias.
 type ColumnRef struct {
-	Name string
+	Table string // "" when unqualified
+	Name  string
 }
 
 // StarExpr represents * in a SELECT column list.

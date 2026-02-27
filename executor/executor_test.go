@@ -923,6 +923,36 @@ func TestTraceToResult(t *testing.T) {
 	if !hasSortRow {
 		t.Error("expected Sort row in trace when Sort > 0")
 	}
+
+	// With JoinLoop > 0, should include a Join Loop row.
+	tr3 := &Trace{
+		StmtType: "SELECT",
+		Table:    "orders",
+		JoinLoop: 10 * time.Microsecond,
+	}
+	r3 := TraceToResult(tr3)
+	hasJoinRow := false
+	for _, row := range r3.Rows {
+		if string(row[0]) == "Join Loop" {
+			hasJoinRow = true
+			break
+		}
+	}
+	if !hasJoinRow {
+		t.Error("expected Join Loop row in trace when JoinLoop > 0")
+	}
+
+	// Without JoinLoop, should not include a Join Loop row.
+	hasJoinRow = false
+	for _, row := range r2.Rows {
+		if string(row[0]) == "Join Loop" {
+			hasJoinRow = true
+			break
+		}
+	}
+	if hasJoinRow {
+		t.Error("should not have Join Loop row when JoinLoop == 0")
+	}
 }
 
 func TestExecutor_SelectLiterals(t *testing.T) {
@@ -1586,5 +1616,212 @@ func TestExecutor_UnaryMinusSelect(t *testing.T) {
 	r := exec(t, e, "SELECT -x FROM t")
 	if string(r.Rows[0][0]) != "-42" {
 		t.Errorf("-x = %q, want -42", r.Rows[0][0])
+	}
+}
+
+// -------------------------------------------------------------------------
+// JOIN tests
+// -------------------------------------------------------------------------
+
+func setupJoinTables(t *testing.T, e *Executor) {
+	t.Helper()
+	exec(t, e, "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT)")
+	exec(t, e, "INSERT INTO orders VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')")
+	exec(t, e, "CREATE TABLE items (id INTEGER PRIMARY KEY, order_id INTEGER, product TEXT, qty INTEGER)")
+	exec(t, e, "INSERT INTO items VALUES (10, 1, 'widget', 5), (11, 1, 'gadget', 3), (12, 2, 'widget', 1)")
+}
+
+func TestExecutor_JoinBasic(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	r := exec(t, e, "SELECT orders.id, orders.customer, items.product, items.qty FROM orders JOIN items ON orders.id = items.order_id")
+	if r.Tag != "SELECT 3" {
+		t.Errorf("tag = %q, want SELECT 3", r.Tag)
+	}
+	if len(r.Columns) != 4 {
+		t.Fatalf("columns = %d, want 4", len(r.Columns))
+	}
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+	// Verify column names.
+	wantCols := []string{"id", "customer", "product", "qty"}
+	for i, want := range wantCols {
+		if r.Columns[i].Name != want {
+			t.Errorf("col[%d] = %q, want %q", i, r.Columns[i].Name, want)
+		}
+	}
+}
+
+func TestExecutor_JoinWithAlias(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	r := exec(t, e, "SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+	if r.Columns[0].Name != "id" {
+		t.Errorf("col[0] = %q, want id", r.Columns[0].Name)
+	}
+	if r.Columns[1].Name != "product" {
+		t.Errorf("col[1] = %q, want product", r.Columns[1].Name)
+	}
+}
+
+func TestExecutor_JoinWithWhere(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	r := exec(t, e, "SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id WHERE i.qty > 1")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_JoinNoMatch(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	// carol (id=3) has no items.
+	r := exec(t, e, "SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id WHERE o.id = 3")
+	if len(r.Rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(r.Rows))
+	}
+}
+
+func TestExecutor_JoinSelectStar(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	r := exec(t, e, "SELECT * FROM orders o JOIN items i ON o.id = i.order_id WHERE o.id = 1")
+	// orders has 2 columns (id, customer), items has 4 (id, order_id, product, qty)
+	if len(r.Columns) != 6 {
+		t.Fatalf("columns = %d, want 6", len(r.Columns))
+	}
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (order 1 has 2 items)", len(r.Rows))
+	}
+}
+
+func TestExecutor_JoinAmbiguousColumn(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	// "id" exists in both tables — should fail when unqualified.
+	_, err := e.Execute("SELECT id FROM orders JOIN items ON orders.id = items.order_id")
+	if err == nil {
+		t.Fatal("expected error for ambiguous column reference")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) {
+		t.Fatalf("error = %T, want *QueryError", err)
+	}
+}
+
+func TestExecutor_JoinOrderBy(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	r := exec(t, e, "SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id ORDER BY i.product")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+	// Alphabetical: gadget, widget, widget
+	if string(r.Rows[0][1]) != "gadget" {
+		t.Errorf("row[0] product = %q, want gadget", r.Rows[0][1])
+	}
+	if string(r.Rows[1][1]) != "widget" {
+		t.Errorf("row[1] product = %q, want widget", r.Rows[1][1])
+	}
+}
+
+func TestExecutor_JoinLimitOffset(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	r := exec(t, e, "SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id ORDER BY i.id LIMIT 2")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+
+	r = exec(t, e, "SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id ORDER BY i.id LIMIT 2 OFFSET 1")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	// Should skip the first row (items.id=10) and return items.id=11 and 12.
+	if string(r.Rows[0][1]) != "gadget" {
+		t.Errorf("row[0] product = %q, want gadget", r.Rows[0][1])
+	}
+	if string(r.Rows[1][1]) != "widget" {
+		t.Errorf("row[1] product = %q, want widget", r.Rows[1][1])
+	}
+}
+
+func TestExecutor_JoinInnerExplicit(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	r := exec(t, e, "SELECT o.id, i.product FROM orders o INNER JOIN items i ON o.id = i.order_id")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+}
+
+func TestExecuteTraced_Join(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	result, tr, err := e.ExecuteTraced("SELECT o.id, i.product FROM orders o JOIN items i ON o.id = i.order_id ORDER BY o.id")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if len(result.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(result.Rows))
+	}
+	if tr.StmtType != "SELECT" {
+		t.Errorf("StmtType = %q, want SELECT", tr.StmtType)
+	}
+	if tr.Total == 0 {
+		t.Error("Total duration should be non-zero")
+	}
+	if tr.Parse == 0 {
+		t.Error("Parse duration should be non-zero")
+	}
+	if tr.Plan == 0 {
+		t.Error("Plan duration should be non-zero")
+	}
+	if tr.Exec == 0 {
+		t.Error("Exec duration should be non-zero")
+	}
+	if tr.JoinLoop == 0 {
+		t.Error("JoinLoop duration should be non-zero for JOIN query")
+	}
+	if tr.Sort == 0 {
+		t.Error("Sort duration should be non-zero for ORDER BY query")
+	}
+	// orders has 3 rows, items has 3 rows = 6 total scanned
+	if tr.RowsScanned != 6 {
+		t.Errorf("RowsScanned = %d, want 6", tr.RowsScanned)
+	}
+	if tr.RowsReturned != 3 {
+		t.Errorf("RowsReturned = %d, want 3", tr.RowsReturned)
+	}
+}
+
+func TestExecuteTraced_JoinNoOrderBy(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+
+	_, tr, err := e.ExecuteTraced("SELECT o.id FROM orders o JOIN items i ON o.id = i.order_id")
+	if err != nil {
+		t.Fatalf("ExecuteTraced: %v", err)
+	}
+	if tr.JoinLoop == 0 {
+		t.Error("JoinLoop duration should be non-zero")
+	}
+	if tr.Sort != 0 {
+		t.Error("Sort duration should be zero when no ORDER BY")
 	}
 }

@@ -13,6 +13,7 @@ type Trace struct {
 	Plan         time.Duration // column resolution, filter building, aggregate detection
 	Exec         time.Duration // storage engine calls (scan, insert, update, delete)
 	Sort         time.Duration // ORDER BY sorting (zero when no ORDER BY)
+	JoinLoop     time.Duration // nested-loop join (zero when no JOIN)
 	RowsScanned  int64
 	RowsReturned int64
 	UsedIndex    bool
@@ -47,6 +48,10 @@ func TraceToResult(tr *Trace) *Result {
 
 	if tr.Sort > 0 {
 		rows = append(rows, [][]byte{[]byte("Sort"), []byte(tr.Sort.String())})
+	}
+
+	if tr.JoinLoop > 0 {
+		rows = append(rows, [][]byte{[]byte("Join Loop"), []byte(tr.JoinLoop.String())})
 	}
 
 	rows = append(rows,

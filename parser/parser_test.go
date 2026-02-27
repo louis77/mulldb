@@ -1113,6 +1113,20 @@ func assertColumnRef(t *testing.T, e Expr, want string) {
 	}
 }
 
+func assertQualifiedColumnRef(t *testing.T, e Expr, wantTable, wantName string) {
+	t.Helper()
+	col, ok := e.(*ColumnRef)
+	if !ok {
+		t.Fatalf("got %T, want *ColumnRef", e)
+	}
+	if col.Table != wantTable {
+		t.Errorf("table = %q, want %q", col.Table, wantTable)
+	}
+	if col.Name != wantName {
+		t.Errorf("column = %q, want %q", col.Name, wantName)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // IS NULL / IS NOT NULL
 // ---------------------------------------------------------------------------
@@ -1436,4 +1450,117 @@ func TestParse_ArithmeticLeftAssociative(t *testing.T) {
 	}
 	assertIntLit(t, inner.Left, 1)
 	assertIntLit(t, inner.Right, 2)
+}
+
+// ---------------------------------------------------------------------------
+// JOIN
+// ---------------------------------------------------------------------------
+
+func TestParse_JoinBasic(t *testing.T) {
+	stmt, err := Parse("SELECT a, b FROM t1 JOIN t2 ON t1.id = t2.t1_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From.Name != "t1" {
+		t.Errorf("from = %q, want t1", sel.From.Name)
+	}
+	if len(sel.Joins) != 1 {
+		t.Fatalf("joins = %d, want 1", len(sel.Joins))
+	}
+	j := sel.Joins[0]
+	if j.Table.Name != "t2" {
+		t.Errorf("join table = %q, want t2", j.Table.Name)
+	}
+	if j.Alias != "" {
+		t.Errorf("join alias = %q, want empty", j.Alias)
+	}
+	// ON condition: t1.id = t2.t1_id
+	bin := j.On.(*BinaryExpr)
+	if bin.Op != "=" {
+		t.Errorf("on op = %q, want =", bin.Op)
+	}
+	assertQualifiedColumnRef(t, bin.Left, "t1", "id")
+	assertQualifiedColumnRef(t, bin.Right, "t2", "t1_id")
+}
+
+func TestParse_InnerJoinExplicit(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.t1_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Joins) != 1 {
+		t.Fatalf("joins = %d, want 1", len(sel.Joins))
+	}
+	if sel.Joins[0].Table.Name != "t2" {
+		t.Errorf("join table = %q, want t2", sel.Joins[0].Table.Name)
+	}
+}
+
+func TestParse_JoinWithAliases(t *testing.T) {
+	stmt, err := Parse("SELECT a.x, b.y FROM t1 a JOIN t2 b ON a.id = b.t1_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.FromAlias != "a" {
+		t.Errorf("from alias = %q, want a", sel.FromAlias)
+	}
+	if sel.Joins[0].Alias != "b" {
+		t.Errorf("join alias = %q, want b", sel.Joins[0].Alias)
+	}
+	assertQualifiedColumnRef(t, sel.Columns[0], "a", "x")
+	assertQualifiedColumnRef(t, sel.Columns[1], "b", "y")
+}
+
+func TestParse_JoinQualifiedWhere(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id WHERE t1.x = 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.Where == nil {
+		t.Fatal("where is nil")
+	}
+	bin := sel.Where.(*BinaryExpr)
+	assertQualifiedColumnRef(t, bin.Left, "t1", "x")
+	assertIntLit(t, bin.Right, 5)
+}
+
+func TestParse_JoinQualifiedOrderBy(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id ORDER BY t1.id DESC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.OrderBy) != 1 {
+		t.Fatalf("orderby = %d, want 1", len(sel.OrderBy))
+	}
+	if sel.OrderBy[0].Table != "t1" {
+		t.Errorf("orderby table = %q, want t1", sel.OrderBy[0].Table)
+	}
+	if sel.OrderBy[0].Column != "id" {
+		t.Errorf("orderby column = %q, want id", sel.OrderBy[0].Column)
+	}
+	if !sel.OrderBy[0].Desc {
+		t.Error("orderby desc = false, want true")
+	}
+}
+
+func TestParse_MultiJoin(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id JOIN t3 ON t2.id = t3.t2_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Joins) != 2 {
+		t.Fatalf("joins = %d, want 2", len(sel.Joins))
+	}
+	if sel.Joins[0].Table.Name != "t2" {
+		t.Errorf("join[0] table = %q, want t2", sel.Joins[0].Table.Name)
+	}
+	if sel.Joins[1].Table.Name != "t3" {
+		t.Errorf("join[1] table = %q, want t3", sel.Joins[1].Table.Name)
+	}
 }
