@@ -92,6 +92,7 @@ type Engine interface {
 	CreateTable(name string, columns []ColumnDef) error
 	DropTable(name string) error
 	GetTable(name string) (*TableDef, bool)
+	ListTables() []*TableDef
 	Insert(table string, columns []string, values [][]any) (int64, error)
 	Scan(table string) (RowIterator, error)
 	Update(table string, sets map[string]any, filter func(Row) bool) (int64, error)

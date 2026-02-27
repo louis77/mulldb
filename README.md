@@ -203,6 +203,31 @@ SELECT 1, 'hello', TRUE, NULL;
 
 Calling an unknown function returns SQLSTATE `42883`. Calling a function with the wrong number of arguments also returns `42883`.
 
+### Catalog Tables
+
+mulldb exposes virtual catalog tables that mimic PostgreSQL system catalogs. These are read-only — `INSERT`, `UPDATE`, and `DELETE` return an error (SQLSTATE `42809`).
+
+Tables can be accessed with or without schema qualification. Unqualified names check `pg_catalog` first (matching PostgreSQL behavior). `information_schema` tables require explicit schema qualification.
+
+| Table | Columns | Description |
+|-------|---------|-------------|
+| `pg_type` / `pg_catalog.pg_type` | `oid` (INTEGER), `typname` (TEXT) | Type information for supported data types |
+| `pg_database` / `pg_catalog.pg_database` | `datname` (TEXT) | Database names (always returns `mulldb`) |
+| `information_schema.tables` | `table_schema` (TEXT), `table_name` (TEXT), `table_type` (TEXT) | Lists all user tables and system catalog tables |
+
+**Examples:**
+
+```sql
+SELECT * FROM pg_type;
+SELECT * FROM pg_catalog.pg_type;  -- same result
+
+SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'public';
+--  table_name | table_type
+-- ------------+------------
+--  users      | BASE TABLE
+--  orders     | BASE TABLE
+```
+
 ### WHERE Expressions
 
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
@@ -349,6 +374,7 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 | `42703` | Undefined column | `SELECT bad_col FROM t` |
 | `22023` | Invalid parameter value | Wrong number of INSERT values |
 | `42803` | Grouping error | Mixing aggregate and non-aggregate columns |
+| `42809` | Wrong object type | `INSERT INTO pg_type ...` (catalog is read-only) |
 | `42883` | Undefined function | Unknown aggregate function or type mismatch |
 
 ## Limitations

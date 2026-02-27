@@ -82,12 +82,28 @@ func (p *parser) parseStatement() (Statement, error) {
 	}
 }
 
+func (p *parser) parseTableRef() (TableRef, error) {
+	name, err := p.expect(TokenIdent)
+	if err != nil {
+		return TableRef{}, err
+	}
+	if p.cur.Type == TokenDot {
+		p.next() // skip dot
+		second, err := p.expect(TokenIdent)
+		if err != nil {
+			return TableRef{}, err
+		}
+		return TableRef{Schema: name.Literal, Name: second.Literal}, nil
+	}
+	return TableRef{Name: name.Literal}, nil
+}
+
 func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	p.next() // skip CREATE
 	if _, err := p.expect(TokenTable); err != nil {
 		return nil, err
 	}
-	name, err := p.expect(TokenIdent)
+	ref, err := p.parseTableRef()
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +127,7 @@ func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
 	if _, err := p.expect(TokenRParen); err != nil {
 		return nil, err
 	}
-	return &CreateTableStmt{Name: name.Literal, Columns: columns}, nil
+	return &CreateTableStmt{Name: ref, Columns: columns}, nil
 }
 
 func (p *parser) parseColumnDef() (ColumnDef, error) {
@@ -142,11 +158,11 @@ func (p *parser) parseDropTable() (*DropTableStmt, error) {
 	if _, err := p.expect(TokenTable); err != nil {
 		return nil, err
 	}
-	name, err := p.expect(TokenIdent)
+	ref, err := p.parseTableRef()
 	if err != nil {
 		return nil, err
 	}
-	return &DropTableStmt{Name: name.Literal}, nil
+	return &DropTableStmt{Name: ref}, nil
 }
 
 func (p *parser) parseInsert() (*InsertStmt, error) {
@@ -154,7 +170,7 @@ func (p *parser) parseInsert() (*InsertStmt, error) {
 	if _, err := p.expect(TokenInto); err != nil {
 		return nil, err
 	}
-	table, err := p.expect(TokenIdent)
+	ref, err := p.parseTableRef()
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +212,7 @@ func (p *parser) parseInsert() (*InsertStmt, error) {
 		p.next()
 	}
 
-	return &InsertStmt{Table: table.Literal, Columns: columns, Values: values}, nil
+	return &InsertStmt{Table: ref, Columns: columns, Values: values}, nil
 }
 
 func (p *parser) parseValueRow() ([]Expr, error) {
@@ -242,15 +258,14 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
-	var tableName string
+	var from TableRef
 	var err error
 	if p.cur.Type == TokenFrom {
 		p.next() // consume FROM
-		table, tableErr := p.expect(TokenIdent)
-		if tableErr != nil {
-			return nil, tableErr
+		from, err = p.parseTableRef()
+		if err != nil {
+			return nil, err
 		}
-		tableName = table.Literal
 	}
 
 	var where Expr
@@ -262,12 +277,12 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
-	return &SelectStmt{Columns: columns, From: tableName, Where: where}, nil
+	return &SelectStmt{Columns: columns, From: from, Where: where}, nil
 }
 
 func (p *parser) parseUpdate() (*UpdateStmt, error) {
 	p.next() // skip UPDATE
-	table, err := p.expect(TokenIdent)
+	ref, err := p.parseTableRef()
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +319,7 @@ func (p *parser) parseUpdate() (*UpdateStmt, error) {
 		}
 	}
 
-	return &UpdateStmt{Table: table.Literal, Sets: sets, Where: where}, nil
+	return &UpdateStmt{Table: ref, Sets: sets, Where: where}, nil
 }
 
 func (p *parser) parseDelete() (*DeleteStmt, error) {
@@ -312,7 +327,7 @@ func (p *parser) parseDelete() (*DeleteStmt, error) {
 	if _, err := p.expect(TokenFrom); err != nil {
 		return nil, err
 	}
-	table, err := p.expect(TokenIdent)
+	ref, err := p.parseTableRef()
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +341,7 @@ func (p *parser) parseDelete() (*DeleteStmt, error) {
 		}
 	}
 
-	return &DeleteStmt{Table: table.Literal, Where: where}, nil
+	return &DeleteStmt{Table: ref, Where: where}, nil
 }
 
 // -------------------------------------------------------------------------

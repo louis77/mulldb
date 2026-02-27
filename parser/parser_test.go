@@ -84,8 +84,8 @@ func TestParse_CreateTable(t *testing.T) {
 	if !ok {
 		t.Fatalf("got %T, want *CreateTableStmt", stmt)
 	}
-	if ct.Name != "users" {
-		t.Errorf("table name = %q, want %q", ct.Name, "users")
+	if ct.Name.Name != "users" {
+		t.Errorf("table name = %q, want %q", ct.Name.Name, "users")
 	}
 	if len(ct.Columns) != 3 {
 		t.Fatalf("columns count = %d, want 3", len(ct.Columns))
@@ -116,8 +116,8 @@ func TestParse_DropTable(t *testing.T) {
 	if !ok {
 		t.Fatalf("got %T, want *DropTableStmt", stmt)
 	}
-	if dt.Name != "users" {
-		t.Errorf("table name = %q, want %q", dt.Name, "users")
+	if dt.Name.Name != "users" {
+		t.Errorf("table name = %q, want %q", dt.Name.Name, "users")
 	}
 }
 
@@ -134,8 +134,8 @@ func TestParse_InsertWithColumns(t *testing.T) {
 	if !ok {
 		t.Fatalf("got %T, want *InsertStmt", stmt)
 	}
-	if ins.Table != "users" {
-		t.Errorf("table = %q, want %q", ins.Table, "users")
+	if ins.Table.Name != "users" {
+		t.Errorf("table = %q, want %q", ins.Table.Name, "users")
 	}
 	if len(ins.Columns) != 3 {
 		t.Fatalf("columns = %v, want [id name active]", ins.Columns)
@@ -213,8 +213,8 @@ func TestParse_SelectStar(t *testing.T) {
 	if _, ok := sel.Columns[0].(*StarExpr); !ok {
 		t.Errorf("column[0] is %T, want *StarExpr", sel.Columns[0])
 	}
-	if sel.From != "users" {
-		t.Errorf("from = %q, want %q", sel.From, "users")
+	if sel.From.Name != "users" {
+		t.Errorf("from = %q, want %q", sel.From.Name, "users")
 	}
 	if sel.Where != nil {
 		t.Errorf("where should be nil")
@@ -318,8 +318,8 @@ func TestParse_Update(t *testing.T) {
 	if !ok {
 		t.Fatalf("got %T, want *UpdateStmt", stmt)
 	}
-	if upd.Table != "users" {
-		t.Errorf("table = %q, want %q", upd.Table, "users")
+	if upd.Table.Name != "users" {
+		t.Errorf("table = %q, want %q", upd.Table.Name, "users")
 	}
 	if len(upd.Sets) != 2 {
 		t.Fatalf("sets = %d, want 2", len(upd.Sets))
@@ -365,8 +365,8 @@ func TestParse_Delete(t *testing.T) {
 	if !ok {
 		t.Fatalf("got %T, want *DeleteStmt", stmt)
 	}
-	if del.Table != "users" {
-		t.Errorf("table = %q, want %q", del.Table, "users")
+	if del.Table.Name != "users" {
+		t.Errorf("table = %q, want %q", del.Table.Name, "users")
 	}
 	if del.Where == nil {
 		t.Fatal("where is nil")
@@ -447,8 +447,8 @@ func TestParse_SelectNoFrom_IntLit(t *testing.T) {
 	if !ok {
 		t.Fatalf("got %T, want *SelectStmt", stmt)
 	}
-	if sel.From != "" {
-		t.Errorf("from = %q, want empty string", sel.From)
+	if !sel.From.IsEmpty() {
+		t.Errorf("from = %q, want empty", sel.From.String())
 	}
 	if len(sel.Columns) != 1 {
 		t.Fatalf("columns = %d, want 1", len(sel.Columns))
@@ -462,8 +462,8 @@ func TestParse_SelectNoFrom_MultipleExprs(t *testing.T) {
 		t.Fatal(err)
 	}
 	sel := stmt.(*SelectStmt)
-	if sel.From != "" {
-		t.Errorf("from = %q, want empty string", sel.From)
+	if !sel.From.IsEmpty() {
+		t.Errorf("from = %q, want empty", sel.From.String())
 	}
 	if len(sel.Columns) != 4 {
 		t.Fatalf("columns = %d, want 4", len(sel.Columns))
@@ -482,8 +482,8 @@ func TestParse_SelectNoFrom_FunctionCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sel := stmt.(*SelectStmt)
-	if sel.From != "" {
-		t.Errorf("from = %q, want empty string", sel.From)
+	if !sel.From.IsEmpty() {
+		t.Errorf("from = %q, want empty", sel.From.String())
 	}
 	fn, ok := sel.Columns[0].(*FunctionCallExpr)
 	if !ok {
@@ -591,6 +591,79 @@ func TestParse_Aggregate_CaseInsensitive(t *testing.T) {
 		if fn.Name != want {
 			t.Errorf("col[%d].Name = %q, want %q", i, fn.Name, want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Dot token / schema-qualified names
+// ---------------------------------------------------------------------------
+
+func TestLexer_DotToken(t *testing.T) {
+	lex := NewLexer("pg_catalog.pg_type")
+	tok := lex.NextToken()
+	if tok.Type != TokenIdent || tok.Literal != "pg_catalog" {
+		t.Fatalf("token[0] = %s %q, want IDENT pg_catalog", tok.Type, tok.Literal)
+	}
+	tok = lex.NextToken()
+	if tok.Type != TokenDot || tok.Literal != "." {
+		t.Fatalf("token[1] = %s %q, want DOT .", tok.Type, tok.Literal)
+	}
+	tok = lex.NextToken()
+	if tok.Type != TokenIdent || tok.Literal != "pg_type" {
+		t.Fatalf("token[2] = %s %q, want IDENT pg_type", tok.Type, tok.Literal)
+	}
+}
+
+func TestParse_SelectSchemaQualified(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM information_schema.tables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From.Schema != "information_schema" {
+		t.Errorf("schema = %q, want information_schema", sel.From.Schema)
+	}
+	if sel.From.Name != "tables" {
+		t.Errorf("name = %q, want tables", sel.From.Name)
+	}
+}
+
+func TestParse_SelectPGCatalogQualified(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM pg_catalog.pg_type")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From.Schema != "pg_catalog" {
+		t.Errorf("schema = %q, want pg_catalog", sel.From.Schema)
+	}
+	if sel.From.Name != "pg_type" {
+		t.Errorf("name = %q, want pg_type", sel.From.Name)
+	}
+}
+
+func TestParse_InsertSchemaQualified(t *testing.T) {
+	stmt, err := Parse("INSERT INTO myschema.t (id) VALUES (1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ins := stmt.(*InsertStmt)
+	if ins.Table.Schema != "myschema" {
+		t.Errorf("schema = %q, want myschema", ins.Table.Schema)
+	}
+	if ins.Table.Name != "t" {
+		t.Errorf("name = %q, want t", ins.Table.Name)
+	}
+}
+
+func TestTableRef_String(t *testing.T) {
+	ref := TableRef{Schema: "information_schema", Name: "tables"}
+	if ref.String() != "information_schema.tables" {
+		t.Errorf("got %q, want information_schema.tables", ref.String())
+	}
+	ref2 := TableRef{Name: "users"}
+	if ref2.String() != "users" {
+		t.Errorf("got %q, want users", ref2.String())
 	}
 }
 

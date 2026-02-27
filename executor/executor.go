@@ -58,23 +58,27 @@ func (e *Executor) execCreateTable(s *parser.CreateTableStmt) (*Result, error) {
 		}
 		cols[i] = storage.ColumnDef{Name: c.Name, DataType: dt}
 	}
-	if err := e.engine.CreateTable(s.Name, cols); err != nil {
+	if err := e.engine.CreateTable(s.Name.Name, cols); err != nil {
 		return nil, WrapError(err)
 	}
 	return &Result{Tag: "CREATE TABLE"}, nil
 }
 
 func (e *Executor) execDropTable(s *parser.DropTableStmt) (*Result, error) {
-	if err := e.engine.DropTable(s.Name); err != nil {
+	if err := e.engine.DropTable(s.Name.Name); err != nil {
 		return nil, WrapError(err)
 	}
 	return &Result{Tag: "DROP TABLE"}, nil
 }
 
 func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
-	def, ok := e.engine.GetTable(s.Table)
+	if isCatalogTable(s.Table.Schema, s.Table.Name) {
+		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot insert into catalog table %q", s.Table.String())}
+	}
+
+	def, ok := e.engine.GetTable(s.Table.Name)
 	if !ok {
-		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table})
+		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table.String()})
 	}
 
 	rows := make([][]any, len(s.Values))
@@ -90,7 +94,7 @@ func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 		rows[i] = vals
 	}
 
-	n, err := e.engine.Insert(s.Table, s.Columns, rows)
+	n, err := e.engine.Insert(s.Table.Name, s.Columns, rows)
 	if err != nil {
 		return nil, WrapError(err)
 	}
@@ -100,13 +104,19 @@ func (e *Executor) execInsert(s *parser.InsertStmt) (*Result, error) {
 }
 
 func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
-	if s.From == "" {
+	if s.From.IsEmpty() {
 		return execSelectStatic(s.Columns)
 	}
 
-	def, ok := e.engine.GetTable(s.From)
-	if !ok {
-		return nil, WrapError(&storage.TableNotFoundError{Name: s.From})
+	// Check catalog tables before the storage engine.
+	var def *storage.TableDef
+	var isCatalog bool
+	if def, isCatalog = getCatalogTable(s.From.Schema, s.From.Name); !isCatalog {
+		var ok bool
+		def, ok = e.engine.GetTable(s.From.Name)
+		if !ok {
+			return nil, WrapError(&storage.TableNotFoundError{Name: s.From.String()})
+		}
 	}
 
 	// Detect aggregate vs non-aggregate columns.
@@ -144,7 +154,12 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 	}
 
 	// Scan and filter rows.
-	it, err := e.engine.Scan(s.From)
+	var it storage.RowIterator
+	if isCatalog {
+		it, err = scanCatalogTable(s.From.Schema, s.From.Name, e.engine)
+	} else {
+		it, err = e.engine.Scan(s.From.Name)
+	}
 	if err != nil {
 		return nil, WrapError(err)
 	}
@@ -233,7 +248,13 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 	}
 
 	// Scan all rows and accumulate.
-	it, err := e.engine.Scan(s.From)
+	var it storage.RowIterator
+	var err error
+	if isCatalogTable(s.From.Schema, s.From.Name) {
+		it, err = scanCatalogTable(s.From.Schema, s.From.Name, e.engine)
+	} else {
+		it, err = e.engine.Scan(s.From.Name)
+	}
 	if err != nil {
 		return nil, WrapError(err)
 	}
@@ -321,9 +342,13 @@ func execSelectStatic(exprs []parser.Expr) (*Result, error) {
 
 
 func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
-	def, ok := e.engine.GetTable(s.Table)
+	if isCatalogTable(s.Table.Schema, s.Table.Name) {
+		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot update catalog table %q", s.Table.String())}
+	}
+
+	def, ok := e.engine.GetTable(s.Table.Name)
 	if !ok {
-		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table})
+		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table.String()})
 	}
 
 	// Evaluate SET values.
@@ -346,7 +371,7 @@ func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 		}
 	}
 
-	n, err := e.engine.Update(s.Table, sets, filter)
+	n, err := e.engine.Update(s.Table.Name, sets, filter)
 	if err != nil {
 		return nil, WrapError(err)
 	}
@@ -354,9 +379,13 @@ func (e *Executor) execUpdate(s *parser.UpdateStmt) (*Result, error) {
 }
 
 func (e *Executor) execDelete(s *parser.DeleteStmt) (*Result, error) {
-	def, ok := e.engine.GetTable(s.Table)
+	if isCatalogTable(s.Table.Schema, s.Table.Name) {
+		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot delete from catalog table %q", s.Table.String())}
+	}
+
+	def, ok := e.engine.GetTable(s.Table.Name)
 	if !ok {
-		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table})
+		return nil, WrapError(&storage.TableNotFoundError{Name: s.Table.String()})
 	}
 
 	var filter func(storage.Row) bool
@@ -368,7 +397,7 @@ func (e *Executor) execDelete(s *parser.DeleteStmt) (*Result, error) {
 		}
 	}
 
-	n, err := e.engine.Delete(s.Table, filter)
+	n, err := e.engine.Delete(s.Table.Name, filter)
 	if err != nil {
 		return nil, WrapError(err)
 	}

@@ -29,6 +29,7 @@ const (
 	TokenComma     // ,
 	TokenSemicolon // ;
 	TokenStar      // *
+	TokenDot       // .
 
 	// Keywords.
 	TokenSelect
@@ -71,6 +72,7 @@ var tokenNames = map[TokenType]string{
 	TokenComma:     ",",
 	TokenSemicolon: ";",
 	TokenStar:      "*",
+	TokenDot:       ".",
 	TokenSelect:    "SELECT",
 	TokenFrom:      "FROM",
 	TokenWhere:     "WHERE",

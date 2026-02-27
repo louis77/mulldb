@@ -54,6 +54,9 @@ func (l *Lexer) NextToken() Token {
 	case l.ch == '*':
 		l.advance()
 		return Token{Type: TokenStar, Literal: "*", Pos: start}
+	case l.ch == '.':
+		l.advance()
+		return Token{Type: TokenDot, Literal: ".", Pos: start}
 	case l.ch == '=':
 		l.advance()
 		return Token{Type: TokenEq, Literal: "=", Pos: start}

@@ -143,6 +143,17 @@ func (e *engine) GetTable(name string) (*TableDef, bool) {
 	return e.catalog.getTable(name)
 }
 
+func (e *engine) ListTables() []*TableDef {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	defs := make([]*TableDef, 0, len(e.catalog.tables))
+	for _, def := range e.catalog.tables {
+		defs = append(defs, def)
+	}
+	return defs
+}
+
 func (e *engine) Insert(table string, columns []string, values [][]any) (int64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

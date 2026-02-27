@@ -12,6 +12,29 @@ type Expr interface {
 }
 
 // ---------------------------------------------------------------------------
+// Table references
+// ---------------------------------------------------------------------------
+
+// TableRef is a possibly schema-qualified table name (e.g. "information_schema.tables").
+type TableRef struct {
+	Schema string // "" when unqualified
+	Name   string
+}
+
+// String returns "schema.name" for qualified refs, or just "name".
+func (r TableRef) String() string {
+	if r.Schema != "" {
+		return r.Schema + "." + r.Name
+	}
+	return r.Name
+}
+
+// IsEmpty reports whether the table ref has no name set (e.g. SELECT without FROM).
+func (r TableRef) IsEmpty() bool {
+	return r.Name == ""
+}
+
+// ---------------------------------------------------------------------------
 // Column / table definitions
 // ---------------------------------------------------------------------------
 
@@ -33,18 +56,18 @@ type SetClause struct {
 
 // CreateTableStmt: CREATE TABLE <name> (<col> <type>, ...)
 type CreateTableStmt struct {
-	Name    string
+	Name    TableRef
 	Columns []ColumnDef
 }
 
 // DropTableStmt: DROP TABLE <name>
 type DropTableStmt struct {
-	Name string
+	Name TableRef
 }
 
 // InsertStmt: INSERT INTO <table> [(<cols>)] VALUES (<exprs>), ...
 type InsertStmt struct {
-	Table   string
+	Table   TableRef
 	Columns []string // nil when omitted
 	Values  [][]Expr
 }
@@ -52,20 +75,20 @@ type InsertStmt struct {
 // SelectStmt: SELECT <cols> FROM <table> [WHERE <expr>]
 type SelectStmt struct {
 	Columns []Expr // StarExpr for *, ColumnRef for named columns
-	From    string
+	From    TableRef
 	Where   Expr // nil when no WHERE clause
 }
 
 // UpdateStmt: UPDATE <table> SET <sets> [WHERE <expr>]
 type UpdateStmt struct {
-	Table string
+	Table TableRef
 	Sets  []SetClause
 	Where Expr // nil when no WHERE clause
 }
 
 // DeleteStmt: DELETE FROM <table> [WHERE <expr>]
 type DeleteStmt struct {
-	Table string
+	Table TableRef
 	Where Expr // nil when no WHERE clause
 }
 
