@@ -847,6 +847,19 @@ func TestParse_SelectReservedWordAsColumn(t *testing.T) {
 	assertColumnRef(t, sel.Columns[0], "select")
 }
 
+func TestParse_CreateTableTypeAliases(t *testing.T) {
+	stmt, err := Parse("CREATE TABLE t (a INT, b SMALLINT, c INTEGER, d BIGINT)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := stmt.(*CreateTableStmt)
+	for i, col := range ct.Columns {
+		if col.DataType != "INTEGER" {
+			t.Errorf("column[%d] %q DataType = %q, want INTEGER", i, col.Name, col.DataType)
+		}
+	}
+}
+
 func TestParse_CreateTableReservedWords(t *testing.T) {
 	stmt, err := Parse(`CREATE TABLE "table" ("select" INTEGER, "from" TEXT)`)
 	if err != nil {

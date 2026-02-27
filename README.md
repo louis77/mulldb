@@ -140,7 +140,7 @@ DELETE FROM <table>;  -- all rows
 
 | Type | Go representation | Description |
 |------|------------------|-------------|
-| `INTEGER` | `int64` | 64-bit signed integer |
+| `INTEGER` | `int64` | 64-bit signed integer (aliases: `INT`, `SMALLINT`, `BIGINT`) |
 | `TEXT` | `string` | Variable-length string |
 | `BOOLEAN` | `bool` | `TRUE` or `FALSE` |
 | `NULL` | `nil` | Absence of a value (any column) |

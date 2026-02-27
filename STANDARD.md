@@ -14,7 +14,7 @@ Legend: **Done** = implemented, **Partial** = partially implemented, **Open** = 
 
 | ID | Feature | Status |
 |----|---------|--------|
-| E011-01 | INTEGER and SMALLINT data types | **Done** (INTEGER only, stored as int64) |
+| E011-01 | INTEGER and SMALLINT data types | **Done** (INTEGER, INT, SMALLINT, BIGINT all accepted; stored as int64) |
 | E011-02 | REAL, DOUBLE PRECISION, and FLOAT data types | Open |
 | E011-03 | DECIMAL and NUMERIC data types | Open |
 | E011-04 | Arithmetic operators | Open (no expressions in SELECT/WHERE yet) |
