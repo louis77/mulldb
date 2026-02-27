@@ -70,7 +70,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | E061-03 | IN predicate with list of values | Open |
 | E061-04 | LIKE predicate | Open |
 | E061-05 | LIKE predicate: ESCAPE clause | Open |
-| E061-06 | NULL predicate (IS NULL) | Open (only `= NULL` works, not standard `IS NULL`) |
+| E061-06 | NULL predicate (IS NULL) | **Done** (`IS NULL` and `IS NOT NULL`; comparisons with NULL yield NULL per SQL standard) |
 | E061-07 | Quantified comparison predicate | Open |
 | E061-08 | EXISTS predicate | Open |
 | E061-09 | Subqueries in comparison predicate | Open |
@@ -148,7 +148,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| E131 | Null value support (nulls in lieu of values) | **Partial** (NULL storage and insertion works; standard IS NULL / IS NOT NULL not implemented) |
+| E131 | Null value support (nulls in lieu of values) | **Done** (NULL storage, insertion, IS NULL / IS NOT NULL predicates, and standard NULL comparison semantics) |
 
 ## E141 — Basic integrity constraints
 
@@ -312,7 +312,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| F481 | Expanded NULL predicate (IS NOT NULL) | Open |
+| F481 | Expanded NULL predicate (IS NOT NULL) | **Done** |
 
 ## F501 — Features and conformance views
 
@@ -345,9 +345,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~31 |
-| **Partial** | ~8 |
-| **Open** | ~138 |
+| **Done** | ~34 |
+| **Partial** | ~6 |
+| **Open** | ~137 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
@@ -360,7 +360,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 - Wire protocol compatibility (host language binding)
 
 ### Biggest gaps to close
-1. **Predicates**: IS NULL, BETWEEN, IN, LIKE
+1. **Predicates**: BETWEEN, IN, LIKE
 2. **Expressions**: Arithmetic in SELECT/WHERE, CASE, CAST, COALESCE
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: No multi-table queries yet

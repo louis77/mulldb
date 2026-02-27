@@ -1221,3 +1221,83 @@ func assertSQLSTATE(t *testing.T, err error, expected string) {
 		t.Errorf("SQLSTATE = %q, want %q (message: %s)", qe.Code, expected, qe.Message)
 	}
 }
+
+// -------------------------------------------------------------------------
+// IS NULL / IS NOT NULL and NULL comparison fix
+// -------------------------------------------------------------------------
+
+func TestExecutor_IsNull(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+	exec(t, e, "INSERT INTO t VALUES (2, NULL)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'bob')")
+
+	r := exec(t, e, "SELECT * FROM t WHERE name IS NULL")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "2" {
+		t.Errorf("id = %s, want 2", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_IsNotNull(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+	exec(t, e, "INSERT INTO t VALUES (2, NULL)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'bob')")
+
+	r := exec(t, e, "SELECT * FROM t WHERE name IS NOT NULL")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_NullComparison_NotEquals(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+	exec(t, e, "INSERT INTO t VALUES (2, NULL)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'bob')")
+
+	// name != NULL should return 0 rows (not 2) per SQL standard
+	r := exec(t, e, "SELECT * FROM t WHERE name != NULL")
+	if len(r.Rows) != 0 {
+		t.Fatalf("got %d rows, want 0 (NULL comparisons yield NULL)", len(r.Rows))
+	}
+}
+
+func TestExecutor_NullComparison_Equals(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+	exec(t, e, "INSERT INTO t VALUES (2, NULL)")
+
+	// name = NULL should return 0 rows per SQL standard
+	r := exec(t, e, "SELECT * FROM t WHERE name = NULL")
+	if len(r.Rows) != 0 {
+		t.Fatalf("got %d rows, want 0 (NULL comparisons yield NULL)", len(r.Rows))
+	}
+}
+
+func TestExecutor_IsNull_UpdateDelete(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+	exec(t, e, "INSERT INTO t VALUES (2, NULL)")
+	exec(t, e, "INSERT INTO t VALUES (3, NULL)")
+
+	// UPDATE with IS NULL
+	r := exec(t, e, "UPDATE t SET name = 'unknown' WHERE name IS NULL")
+	if r.Tag != "UPDATE 2" {
+		t.Errorf("tag = %q, want UPDATE 2", r.Tag)
+	}
+
+	// DELETE with IS NOT NULL
+	r = exec(t, e, "DELETE FROM t WHERE name IS NOT NULL")
+	if r.Tag != "DELETE 3" {
+		t.Errorf("tag = %q, want DELETE 3", r.Tag)
+	}
+}

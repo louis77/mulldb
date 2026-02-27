@@ -906,6 +906,16 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 	case *parser.BinaryExpr:
 		return compileBinaryExpr(e, def)
 
+	case *parser.IsNullExpr:
+		inner, err := compileExpr(e.Expr, def)
+		if err != nil {
+			return nil, err
+		}
+		if e.Not {
+			return func(r storage.Row) any { return inner(r) != nil }, nil
+		}
+		return func(r storage.Row) any { return inner(r) == nil }, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported expression type %T", expr)
 	}
@@ -941,28 +951,52 @@ func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, e
 			return lv || rv
 		}, nil
 	case "=":
-		return func(r storage.Row) any { return storage.CompareValues(left(r), right(r)) == 0 }, nil
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c == 0
+		}, nil
 	case "!=":
-		return func(r storage.Row) any { return storage.CompareValues(left(r), right(r)) != 0 }, nil
+		return func(r storage.Row) any {
+			c := storage.CompareValues(left(r), right(r))
+			if c == -2 {
+				return nil
+			}
+			return c != 0
+		}, nil
 	case "<":
 		return func(r storage.Row) any {
 			c := storage.CompareValues(left(r), right(r))
-			return c != -2 && c < 0
+			if c == -2 {
+				return nil
+			}
+			return c < 0
 		}, nil
 	case ">":
 		return func(r storage.Row) any {
 			c := storage.CompareValues(left(r), right(r))
-			return c != -2 && c > 0
+			if c == -2 {
+				return nil
+			}
+			return c > 0
 		}, nil
 	case "<=":
 		return func(r storage.Row) any {
 			c := storage.CompareValues(left(r), right(r))
-			return c != -2 && c <= 0
+			if c == -2 {
+				return nil
+			}
+			return c <= 0
 		}, nil
 	case ">=":
 		return func(r storage.Row) any {
 			c := storage.CompareValues(left(r), right(r))
-			return c != -2 && c >= 0
+			if c == -2 {
+				return nil
+			}
+			return c >= 0
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported operator %q", e.Op)

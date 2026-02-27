@@ -159,6 +159,12 @@ type AliasExpr struct {
 	Alias string
 }
 
+// IsNullExpr represents IS NULL or IS NOT NULL.
+type IsNullExpr struct {
+	Expr Expr
+	Not  bool // true for IS NOT NULL
+}
+
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
@@ -168,3 +174,4 @@ func (*NullLit) exprNode()           {}
 func (*BinaryExpr) exprNode()        {}
 func (*FunctionCallExpr) exprNode()  {}
 func (*AliasExpr) exprNode()         {}
+func (*IsNullExpr) exprNode()        {}

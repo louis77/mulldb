@@ -41,7 +41,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **Scalar functions** — `VERSION()` and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
-- **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), logical (`AND`, `OR`), parenthesized expressions
+- **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
 - **Full UTF-8 support** — identifiers, string literals, and all data are UTF-8 throughout; no other character encoding exists
 - **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`), Unicode identifiers (`"café"`, `"名前"`)
 - **WAL migration** — versioned WAL format with opt-in `--migrate` flag and backup preservation
@@ -419,11 +419,20 @@ SHOW TRACE;
 ### WHERE Expressions
 
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
+- **NULL predicates**: `IS NULL`, `IS NOT NULL`
 - **Logical operators**: `AND`, `OR`
 - **Parentheses**: `(expr)` for grouping
 - **Literals**: integers, `'single-quoted strings'`, `TRUE`, `FALSE`, `NULL`
 
-Operator precedence (lowest to highest): `OR` → `AND` → comparisons → primary.
+**NULL semantics.** Comparing any value to NULL with `=`, `!=`, `<`, etc. yields NULL (unknown), never true or false — matching the SQL standard. Use `IS NULL` and `IS NOT NULL` to test for NULL values.
+
+```sql
+SELECT * FROM t WHERE name IS NULL;       -- rows where name is NULL
+SELECT * FROM t WHERE name IS NOT NULL;   -- rows where name is not NULL
+SELECT * FROM t WHERE name = NULL;        -- always returns 0 rows (standard behavior)
+```
+
+Operator precedence (lowest to highest): `OR` → `AND` → comparisons / IS [NOT] NULL → primary.
 
 ## Architecture
 
@@ -617,9 +626,9 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
+- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, IS NULL / IS NOT NULL, aggregate and scalar function syntax, column aliases (AS), ORDER BY, optional FROM clause, UTF-8 identifiers and string literals, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NULL comparison semantics, SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 

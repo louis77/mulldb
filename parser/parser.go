@@ -477,6 +477,19 @@ func (p *parser) parseComparison() (Expr, error) {
 		return nil, err
 	}
 
+	if p.cur.Type == TokenIs {
+		p.next()
+		not := false
+		if p.cur.Type == TokenNot {
+			not = true
+			p.next()
+		}
+		if _, err := p.expect(TokenNull); err != nil {
+			return nil, err
+		}
+		return &IsNullExpr{Expr: left, Not: not}, nil
+	}
+
 	var op string
 	switch p.cur.Type {
 	case TokenEq:

@@ -1112,3 +1112,62 @@ func assertColumnRef(t *testing.T, e Expr, want string) {
 		t.Errorf("column = %q, want %q", col.Name, want)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// IS NULL / IS NOT NULL
+// ---------------------------------------------------------------------------
+
+func TestParse_IsNull(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col IS NULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	isn, ok := sel.Where.(*IsNullExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *IsNullExpr", sel.Where)
+	}
+	assertColumnRef(t, isn.Expr, "col")
+	if isn.Not {
+		t.Error("Not = true, want false")
+	}
+}
+
+func TestParse_IsNotNull(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE col IS NOT NULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	isn, ok := sel.Where.(*IsNullExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *IsNullExpr", sel.Where)
+	}
+	assertColumnRef(t, isn.Expr, "col")
+	if !isn.Not {
+		t.Error("Not = false, want true")
+	}
+}
+
+func TestParse_IsNullWithAnd(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE a IS NULL AND b = 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *BinaryExpr (AND)", sel.Where)
+	}
+	if bin.Op != "AND" {
+		t.Fatalf("Op = %q, want AND", bin.Op)
+	}
+	isn, ok := bin.Left.(*IsNullExpr)
+	if !ok {
+		t.Fatalf("Left = %T, want *IsNullExpr", bin.Left)
+	}
+	assertColumnRef(t, isn.Expr, "a")
+	if isn.Not {
+		t.Error("Not = true, want false")
+	}
+}

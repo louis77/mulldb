@@ -250,6 +250,8 @@ For example, `WHERE id > 5 AND name = 'Alice'` compiles into a closure that:
 
 This is faster than re-walking the AST for every row, which matters when scanning large tables.
 
+**NULL semantics.** Comparison operators (`=`, `!=`, `<`, `>`, `<=`, `>=`) return `nil` (SQL NULL) when either operand is NULL, following the SQL standard. The `buildFilter()` function already treats `nil` as row-rejection (`ok && b` where `ok` is false for non-bool values), so NULL-yielding comparisons correctly exclude rows without special handling. `IS NULL` and `IS NOT NULL` are compiled as simple nil-checks on the inner expression's result.
+
 ### Aggregate Functions
 
 Queries with aggregate functions (COUNT, SUM, MIN, MAX) follow a separate code path from regular SELECT. The executor first detects whether a query is all-aggregate, all-non-aggregate, or mixed. Mixed queries (like `SELECT id, COUNT(*) FROM t`) are rejected with SQLSTATE code 42803, matching PostgreSQL behavior (no GROUP BY support yet).

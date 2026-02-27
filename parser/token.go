@@ -62,6 +62,7 @@ const (
 	TokenBy        // BY
 	TokenAsc       // ASC
 	TokenDesc      // DESC
+	TokenIs        // IS
 )
 
 var tokenNames = map[TokenType]string{
@@ -112,6 +113,7 @@ var tokenNames = map[TokenType]string{
 	TokenBy:        "BY",
 	TokenAsc:       "ASC",
 	TokenDesc:      "DESC",
+	TokenIs:        "IS",
 }
 
 func (t TokenType) String() string {
@@ -162,6 +164,7 @@ var keywords = map[string]TokenType{
 	"BY":      TokenBy,
 	"ASC":     TokenAsc,
 	"DESC":    TokenDesc,
+	"IS":      TokenIs,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent
