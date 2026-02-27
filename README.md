@@ -14,7 +14,8 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Scalar functions** — `VERSION()` and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), logical (`AND`, `OR`), parenthesized expressions
-- **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`)
+- **Full UTF-8 support** — identifiers, string literals, and all data are UTF-8 throughout; no other character encoding exists
+- **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`), Unicode identifiers (`"café"`, `"名前"`)
 - **WAL migration** — versioned WAL format with opt-in `--migrate` flag and backup preservation
 - **Concurrent access** — single-writer / multi-reader via RWMutex, safe for multiple connections
 - **Cleartext password authentication** — simple username/password access control
@@ -136,12 +137,23 @@ DELETE FROM <table> WHERE <condition>;
 DELETE FROM <table>;  -- all rows
 ```
 
+### Character Encoding
+
+mulldb uses **UTF-8 exclusively** — there is no encoding configuration and no other character set. All layers handle UTF-8 natively:
+
+- **Identifiers** — table and column names can contain any Unicode letter (`café`, `名前`, `αβγ`), both unquoted and double-quoted
+- **String literals** — `'München'`, `'東京'`, `'hello 🌍'` all work as expected
+- **Storage and WAL** — strings are stored as raw UTF-8 bytes with byte-length prefixes
+- **Wire protocol** — UTF-8 bytes are sent as-is over the PostgreSQL wire protocol, which is encoding-aware
+
+String comparison is **binary** (byte-order). There is no locale-aware collation — `'a' < 'b'` works, but locale-specific sort orders (e.g. German `ä` sorting with `a`) are not supported.
+
 ### Data Types
 
 | Type | Go representation | Description |
 |------|------------------|-------------|
 | `INTEGER` | `int64` | 64-bit signed integer (aliases: `INT`, `SMALLINT`, `BIGINT`) |
-| `TEXT` | `string` | Variable-length string |
+| `TEXT` | `string` | Variable-length UTF-8 string |
 | `BOOLEAN` | `bool` | `TRUE` or `FALSE` |
 | `NULL` | `nil` | Absence of a value (any column) |
 
@@ -479,7 +491,7 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, column aliases (AS), optional FROM clause, error cases
+- **Parser**: all 6 statement types, WHERE with AND/OR/precedence, operators, aggregate and scalar function syntax, column aliases (AS), optional FROM clause, UTF-8 identifiers and string literals, error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes
 - **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), aggregate functions (COUNT/SUM/MIN/MAX), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), SQLSTATE codes, column resolution, NULL handling
 

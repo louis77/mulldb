@@ -23,11 +23,13 @@ Legend: **Done** = implemented, **Partial** = partially implemented, **Open** = 
 
 ## E021 — Character string types
 
+All character data is UTF-8. There is no encoding configuration, no `CHARACTER SET` clause, and no other character set. String comparison uses binary (byte-order) collation.
+
 | ID | Feature | Status |
 |----|---------|--------|
 | E021-01 | CHARACTER data type (fixed-length) | Open |
-| E021-02 | CHARACTER VARYING data type | **Done** (TEXT) |
-| E021-03 | Character literals | **Done** (single-quoted strings) |
+| E021-02 | CHARACTER VARYING data type | **Done** (TEXT; UTF-8 encoded) |
+| E021-03 | Character literals | **Done** (single-quoted strings; full UTF-8 support) |
 | E021-04 | CHARACTER_LENGTH function | Open |
 | E021-05 | OCTET_LENGTH function | Open |
 | E021-06 | SUBSTRING function | Open |
@@ -36,13 +38,13 @@ Legend: **Done** = implemented, **Partial** = partially implemented, **Open** = 
 | E021-09 | TRIM function | Open |
 | E021-10 | Implicit casting among character string types | Open (only one string type exists) |
 | E021-11 | POSITION function | Open |
-| E021-12 | Character comparison | **Done** |
+| E021-12 | Character comparison | **Done** (binary collation) |
 
 ## E031 — Identifiers
 
 | ID | Feature | Status |
 |----|---------|--------|
-| E031-01 | Delimited identifiers | **Done** (double-quoted identifiers) |
+| E031-01 | Delimited identifiers | **Done** (double-quoted identifiers; full UTF-8 support) |
 | E031-02 | Lower case identifiers | **Done** (bare identifiers are case-insensitive) |
 | E031-03 | Trailing underscore | **Done** |
 

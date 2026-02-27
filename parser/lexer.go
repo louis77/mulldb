@@ -1,34 +1,45 @@
 package parser
 
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
 // Lexer tokenizes a SQL input string.
 type Lexer struct {
 	input string
-	pos   int  // current position (index of ch)
-	ch    byte // current character, 0 at EOF
+	pos   int  // current byte position
+	width int  // byte width of current rune
+	ch    rune // current character, 0 at EOF
 }
 
 // NewLexer creates a lexer for the given input.
 func NewLexer(input string) *Lexer {
-	l := &Lexer{input: input, pos: -1}
-	l.advance()
+	l := &Lexer{input: input}
+	if len(input) > 0 {
+		l.ch, l.width = utf8.DecodeRuneInString(input)
+	}
 	return l
 }
 
 func (l *Lexer) advance() {
-	l.pos++
+	l.pos += l.width
 	if l.pos >= len(l.input) {
 		l.ch = 0
+		l.width = 0
 	} else {
-		l.ch = l.input[l.pos]
+		l.ch, l.width = utf8.DecodeRuneInString(l.input[l.pos:])
 	}
 }
 
-func (l *Lexer) peek() byte {
-	next := l.pos + 1
+func (l *Lexer) peek() rune {
+	next := l.pos + l.width
 	if next >= len(l.input) {
 		return 0
 	}
-	return l.input[next]
+	r, _ := utf8.DecodeRuneInString(l.input[next:])
+	return r
 }
 
 // NextToken returns the next token from the input.
@@ -142,26 +153,26 @@ func (l *Lexer) readIdentOrKeyword(start int) Token {
 
 func (l *Lexer) readQuotedIdent(start int) Token {
 	l.advance() // skip opening double-quote
-	var buf []byte
+	var buf strings.Builder
 	for {
 		if l.ch == 0 {
-			return Token{Type: TokenIllegal, Literal: string(buf), Pos: start}
+			return Token{Type: TokenIllegal, Literal: buf.String(), Pos: start}
 		}
 		if l.ch == '"' {
 			if l.peek() == '"' {
 				// "" escape → literal double-quote
-				buf = append(buf, '"')
+				buf.WriteByte('"')
 				l.advance()
 				l.advance()
 				continue
 			}
 			l.advance() // skip closing double-quote
-			return Token{Type: TokenIdent, Literal: string(buf), Pos: start}
+			return Token{Type: TokenIdent, Literal: buf.String(), Pos: start}
 		}
-		buf = append(buf, l.ch)
+		buf.WriteRune(l.ch)
 		l.advance()
 	}
 }
 
-func isDigit(ch byte) bool  { return ch >= '0' && ch <= '9' }
-func isLetter(ch byte) bool { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') }
+func isDigit(ch rune) bool  { return ch >= '0' && ch <= '9' }
+func isLetter(ch rune) bool { return unicode.IsLetter(ch) }

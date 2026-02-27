@@ -25,6 +25,7 @@ See [STANDARD.md](STANDARD.md) for the SQL standard (Core SQL) conformance check
 
 - Use `any` instead of `interface{}`
 - Standard Go project layout with packages: `server/`, `pgwire/`, `parser/`, `executor/`, `storage/`, `storage/index/`, `config/`
+- **UTF-8 only**: mulldb uses UTF-8 exclusively — no encoding configuration, no other character set. The lexer is rune-based (`unicode/utf8`), identifiers accept any `unicode.IsLetter` character, and strings are stored/transmitted as raw UTF-8 bytes.
 
 ## Building & Running
 
