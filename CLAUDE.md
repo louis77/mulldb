@@ -26,6 +26,7 @@ See [PLAN.md](PLAN.md) for the full architecture, implementation phases, and des
 - CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`), `UPDATE`, `DELETE`
 - Data types: `INTEGER`, `TEXT`, `BOOLEAN`
 - Aggregate functions: `COUNT(*)`, `COUNT(col)`, `SUM`, `MIN`, `MAX`
+- `LIMIT` and `OFFSET` for result pagination
 - Column aliases with `AS`
 - Schema-qualified table names (`schema.table`)
 - Double-quoted identifiers (`"select"`, `"public"."names"`) — allows reserved words as identifiers, preserves exact casing, supports `""` escape for literal double-quote

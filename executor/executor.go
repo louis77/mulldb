@@ -119,6 +119,14 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		}
 	}
 
+	// Validate LIMIT/OFFSET values.
+	if s.Limit != nil && *s.Limit < 0 {
+		return nil, &QueryError{Code: "2201W", Message: "LIMIT must not be negative"}
+	}
+	if s.Offset != nil && *s.Offset < 0 {
+		return nil, &QueryError{Code: "2201X", Message: "OFFSET must not be negative"}
+	}
+
 	// Detect aggregate vs non-aggregate columns.
 	hasAgg, hasNonAgg := false, false
 	for _, col := range s.Columns {
@@ -169,7 +177,18 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 	}
 	defer it.Close()
 
+	// Apply LIMIT/OFFSET during row collection for efficiency.
+	var offset int64
+	if s.Offset != nil {
+		offset = *s.Offset
+	}
+	limit := int64(-1) // -1 means no limit
+	if s.Limit != nil {
+		limit = *s.Limit
+	}
+
 	var resultRows [][][]byte
+	var matched int64
 	for {
 		row, ok := it.Next()
 		if !ok {
@@ -178,11 +197,21 @@ func (e *Executor) execSelect(s *parser.SelectStmt) (*Result, error) {
 		if filter != nil && !filter(row) {
 			continue
 		}
+		matched++
+		if matched <= offset {
+			continue
+		}
+		if limit == 0 {
+			break
+		}
 		textRow := make([][]byte, len(colIndices))
 		for i, idx := range colIndices {
 			textRow[i] = formatValue(row.Values[idx])
 		}
 		resultRows = append(resultRows, textRow)
+		if limit > 0 && int64(len(resultRows)) >= limit {
+			break
+		}
 	}
 
 	return &Result{
@@ -327,10 +356,19 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		}
 	}
 
+	// Apply LIMIT/OFFSET to the single aggregate result row.
+	rows := [][][]byte{resultRow}
+	if s.Offset != nil && *s.Offset > 0 {
+		rows = nil
+	}
+	if s.Limit != nil && *s.Limit == 0 {
+		rows = nil
+	}
+
 	return &Result{
 		Columns: resultCols,
-		Rows:    [][][]byte{resultRow},
-		Tag:     "SELECT 1",
+		Rows:    rows,
+		Tag:     fmt.Sprintf("SELECT %d", len(rows)),
 	}, nil
 }
 

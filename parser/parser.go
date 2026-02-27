@@ -285,7 +285,37 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
-	return &SelectStmt{Columns: columns, From: from, Where: where}, nil
+	// Parse optional LIMIT and OFFSET (in either order).
+	var limit, offset *int64
+	for i := 0; i < 2; i++ {
+		if p.cur.Type == TokenLimit && limit == nil {
+			p.next()
+			tok, err := p.expect(TokenIntLit)
+			if err != nil {
+				return nil, err
+			}
+			v, err := strconv.ParseInt(tok.Literal, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid LIMIT value %q: %w", tok.Literal, err)
+			}
+			limit = &v
+		} else if p.cur.Type == TokenOffset && offset == nil {
+			p.next()
+			tok, err := p.expect(TokenIntLit)
+			if err != nil {
+				return nil, err
+			}
+			v, err := strconv.ParseInt(tok.Literal, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid OFFSET value %q: %w", tok.Literal, err)
+			}
+			offset = &v
+		} else {
+			break
+		}
+	}
+
+	return &SelectStmt{Columns: columns, From: from, Where: where, Limit: limit, Offset: offset}, nil
 }
 
 func (p *parser) parseUpdate() (*UpdateStmt, error) {

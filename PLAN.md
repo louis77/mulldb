@@ -12,7 +12,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Wire protocol | PostgreSQL v3 (simple query flow) |
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
-| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`), `UPDATE`, `DELETE`. Double-quoted identifiers for reserved words and case preservation. |
+| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`, `LIMIT`, `OFFSET`), `UPDATE`, `DELETE`. Double-quoted identifiers for reserved words and case preservation. |
 | Data types | `INTEGER`, `TEXT`, `BOOLEAN` |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |

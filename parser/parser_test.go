@@ -673,6 +673,83 @@ func TestParse_SelectMixedAliasNoAlias(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// LIMIT / OFFSET
+// ---------------------------------------------------------------------------
+
+func TestParse_SelectLimit(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t LIMIT 10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.Limit == nil || *sel.Limit != 10 {
+		t.Errorf("limit = %v, want 10", sel.Limit)
+	}
+	if sel.Offset != nil {
+		t.Errorf("offset = %v, want nil", sel.Offset)
+	}
+}
+
+func TestParse_SelectOffset(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t OFFSET 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.Offset == nil || *sel.Offset != 5 {
+		t.Errorf("offset = %v, want 5", sel.Offset)
+	}
+	if sel.Limit != nil {
+		t.Errorf("limit = %v, want nil", sel.Limit)
+	}
+}
+
+func TestParse_SelectLimitOffset(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t LIMIT 10 OFFSET 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.Limit == nil || *sel.Limit != 10 {
+		t.Errorf("limit = %v, want 10", sel.Limit)
+	}
+	if sel.Offset == nil || *sel.Offset != 5 {
+		t.Errorf("offset = %v, want 5", sel.Offset)
+	}
+}
+
+func TestParse_SelectOffsetLimit(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t OFFSET 5 LIMIT 10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.Limit == nil || *sel.Limit != 10 {
+		t.Errorf("limit = %v, want 10", sel.Limit)
+	}
+	if sel.Offset == nil || *sel.Offset != 5 {
+		t.Errorf("offset = %v, want 5", sel.Offset)
+	}
+}
+
+func TestParse_SelectWhereLimitOffset(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE id > 1 LIMIT 10 OFFSET 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.Where == nil {
+		t.Fatal("where is nil")
+	}
+	if sel.Limit == nil || *sel.Limit != 10 {
+		t.Errorf("limit = %v, want 10", sel.Limit)
+	}
+	if sel.Offset == nil || *sel.Offset != 5 {
+		t.Errorf("offset = %v, want 5", sel.Offset)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Double-quoted identifiers
 // ---------------------------------------------------------------------------
 

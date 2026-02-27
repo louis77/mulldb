@@ -539,6 +539,128 @@ func TestExecutor_QuotedIdentifiers(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// LIMIT / OFFSET
+// -------------------------------------------------------------------------
+
+func TestExecutor_SelectLimit(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')")
+
+	r := exec(t, e, "SELECT * FROM t LIMIT 3")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+	if r.Tag != "SELECT 3" {
+		t.Errorf("tag = %q, want SELECT 3", r.Tag)
+	}
+}
+
+func TestExecutor_SelectOffset(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')")
+
+	r := exec(t, e, "SELECT * FROM t OFFSET 2")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+}
+
+func TestExecutor_SelectLimitOffset(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')")
+
+	r := exec(t, e, "SELECT * FROM t LIMIT 2 OFFSET 1")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_SelectLimitZero(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2), (3)")
+
+	r := exec(t, e, "SELECT * FROM t LIMIT 0")
+	if len(r.Rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(r.Rows))
+	}
+	if r.Tag != "SELECT 0" {
+		t.Errorf("tag = %q, want SELECT 0", r.Tag)
+	}
+}
+
+func TestExecutor_SelectOffsetBeyondRows(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2), (3)")
+
+	r := exec(t, e, "SELECT * FROM t OFFSET 100")
+	if len(r.Rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(r.Rows))
+	}
+}
+
+func TestExecutor_SelectLimitExceedsRows(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2), (3)")
+
+	r := exec(t, e, "SELECT * FROM t LIMIT 100")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+}
+
+func TestExecutor_SelectOffsetWithoutLimit(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2), (3), (4), (5)")
+
+	r := exec(t, e, "SELECT * FROM t OFFSET 3")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_SelectLimitWithWhere(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')")
+
+	// WHERE id > 1 matches 4 rows; LIMIT 2 returns only 2.
+	r := exec(t, e, "SELECT * FROM t WHERE id > 1 LIMIT 2")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_SelectNegativeLimit(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1)")
+
+	// Negative values are rejected at parse time (lexer produces ILLEGAL for '-').
+	_, err := e.Execute("SELECT * FROM t LIMIT -1")
+	if err == nil {
+		t.Fatal("expected error for negative LIMIT")
+	}
+}
+
+func TestExecutor_SelectNegativeOffset(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1)")
+
+	_, err := e.Execute("SELECT * FROM t OFFSET -1")
+	if err == nil {
+		t.Fatal("expected error for negative OFFSET")
+	}
+}
+
 func assertSQLSTATE(t *testing.T, err error, expected string) {
 	t.Helper()
 	if err == nil {
