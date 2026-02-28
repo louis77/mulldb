@@ -13,17 +13,20 @@ func CompareValues(a, b any) int {
 	}
 	switch av := a.(type) {
 	case int64:
-		bv, ok := b.(int64)
-		if !ok {
-			return -2
-		}
-		switch {
-		case av < bv:
-			return -1
-		case av > bv:
-			return 1
+		switch bv := b.(type) {
+		case int64:
+			switch {
+			case av < bv:
+				return -1
+			case av > bv:
+				return 1
+			default:
+				return 0
+			}
+		case float64:
+			return compareFloat64(float64(av), bv)
 		default:
-			return 0
+			return -2
 		}
 	case string:
 		switch bv := b.(type) {
@@ -35,6 +38,15 @@ func CompareValues(a, b any) int {
 				return -2
 			}
 			return CompareValues(t, bv)
+		default:
+			return -2
+		}
+	case float64:
+		switch bv := b.(type) {
+		case float64:
+			return compareFloat64(av, bv)
+		case int64:
+			return compareFloat64(av, float64(bv))
 		default:
 			return -2
 		}
@@ -72,5 +84,16 @@ func CompareValues(a, b any) int {
 		}
 	default:
 		return -2
+	}
+}
+
+func compareFloat64(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
 	}
 }

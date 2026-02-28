@@ -44,9 +44,9 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
-- **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `VERSION()`, and a registration pattern for adding more
-- **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, TIMESTAMP (UTC), NULL
-- **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
+- **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `NOW()`, `VERSION()`, math functions (`ABS`, `ROUND`, `CEIL`/`CEILING`, `FLOOR`, `POWER`/`POW`, `SQRT`, `MOD`), and a registration pattern for adding more
+- **Data types** — INTEGER (64-bit), FLOAT (64-bit IEEE 754), TEXT, BOOLEAN, TIMESTAMP (UTC), NULL
+- **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers and floats; implicit int→float promotion in mixed arithmetic; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
 - **Pattern matching** — `LIKE` / `NOT LIKE` (case-sensitive), `ILIKE` / `NOT ILIKE` (case-insensitive, PostgreSQL extension); `%` matches zero or more characters, `_` matches exactly one Unicode codepoint; `ESCAPE` clause for literal `%`/`_`; NULL propagation
 - **IN predicate** — `IN (v1, v2, ...)` and `NOT IN (v1, v2, ...)`; SQL-standard three-valued NULL logic (NULL LHS → NULL, NULL in list with no match → NULL)
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `LIKE` / `ILIKE`, `IN` / `NOT IN`, `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
@@ -210,6 +210,7 @@ String comparison is **binary** (byte-order). There is no locale-aware collation
 | Type | Go representation | Description |
 |------|------------------|-------------|
 | `INTEGER` | `int64` | 64-bit signed integer (aliases: `INT`, `SMALLINT`, `BIGINT`) |
+| `FLOAT` | `float64` | 64-bit IEEE 754 double-precision floating point (alias: `DOUBLE PRECISION`) |
 | `TEXT` | `string` | Variable-length UTF-8 string |
 | `BOOLEAN` | `bool` | `TRUE` or `FALSE` |
 | `TIMESTAMP` | `time.Time` | UTC timestamp with microsecond precision (aliases: `TIMESTAMPTZ`, `TIMESTAMP WITH TIME ZONE`) |
@@ -232,9 +233,9 @@ Aggregate functions collapse all matching rows into a single result row. Multipl
 |----------|----------|---------|-------------|
 | `COUNT(*)` | — | `INTEGER` | Count of all rows |
 | `COUNT(col)` | any column | `INTEGER` | Count of non-NULL values in `col` |
-| `SUM(col)` | `INTEGER` column | `INTEGER` | Sum of all non-NULL values |
-| `MIN(col)` | `INTEGER`, `TEXT`, or `TIMESTAMP` column | same as `col` | Smallest non-NULL value |
-| `MAX(col)` | `INTEGER`, `TEXT`, or `TIMESTAMP` column | same as `col` | Largest non-NULL value |
+| `SUM(col)` | `INTEGER` or `FLOAT` column | same as `col` | Sum of all non-NULL values |
+| `MIN(col)` | `INTEGER`, `FLOAT`, `TEXT`, or `TIMESTAMP` column | same as `col` | Smallest non-NULL value |
+| `MAX(col)` | `INTEGER`, `FLOAT`, `TEXT`, or `TIMESTAMP` column | same as `col` | Largest non-NULL value |
 
 Function names are case-insensitive (`sum`, `Sum`, `SUM` all work).
 
@@ -404,7 +405,7 @@ SELECT * FROM items WHERE id > 1 LIMIT 2;
 
 ### Arithmetic Expressions
 
-Integer arithmetic operators `+`, `-`, `*`, `/`, `%` (modulo) and unary minus are supported in SELECT columns, WHERE conditions, INSERT VALUES, and UPDATE SET clauses. All arithmetic is integer-only (64-bit signed). Division and modulo by zero return SQLSTATE `22012`.
+Arithmetic operators `+`, `-`, `*`, `/`, `%` (modulo) and unary minus are supported in SELECT columns, WHERE conditions, INSERT VALUES, and UPDATE SET clauses. Arithmetic works on both integers (64-bit signed) and floats (64-bit IEEE 754). When one operand is integer and the other is float, the integer is implicitly promoted to float. Division and modulo by zero return SQLSTATE `22012`.
 
 Operator precedence follows standard math rules: unary minus binds tightest, then `*` / `/` / `%`, then `+` / `-`, then comparisons, then logical operators.
 
@@ -494,6 +495,14 @@ Scalar functions return a single value per row. They can be used in `SELECT` col
 | `CHAR_LENGTH(text)` | 1 TEXT | `INTEGER` | SQL-standard alias for `LENGTH()` |
 | `OCTET_LENGTH(text)` | 1 TEXT | `INTEGER` | Number of bytes (UTF-8 encoded length) |
 | `CONCAT(arg, ...)` | 1+ any | `TEXT` | Concatenates all arguments as text; NULLs are skipped (treated as empty string); never returns NULL |
+| `ABS(x)` | 1 numeric | same as input | Absolute value (preserves int/float type) |
+| `ROUND(x)` | 1 numeric | `FLOAT` | Round to nearest integer |
+| `ROUND(x, n)` | 2 numeric | `FLOAT` | Round to `n` decimal places |
+| `CEIL(x)` / `CEILING(x)` | 1 numeric | `FLOAT` | Smallest integer not less than `x` |
+| `FLOOR(x)` | 1 numeric | `FLOAT` | Largest integer not greater than `x` |
+| `POWER(x, y)` / `POW(x, y)` | 2 numeric | `FLOAT` | `x` raised to the power `y` |
+| `SQRT(x)` | 1 numeric | `FLOAT` | Square root (error on negative input, SQLSTATE `2201F`) |
+| `MOD(x, y)` | 2 numeric | same as input | Modulo (error on `y=0`, SQLSTATE `22012`) |
 | `NOW()` | 0 | `TIMESTAMP` | Current UTC timestamp |
 | `VERSION()` | 0 | `TEXT` | PostgreSQL-compatible version string identifying the mulldb build |
 
@@ -627,13 +636,13 @@ SHOW TRACE;
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
 - **Pattern matching**: `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`
 - **IN predicate**: `IN (v1, v2, ...)`, `NOT IN (v1, v2, ...)`
-- **Arithmetic**: `+`, `-`, `*`, `/`, `%` (integer only)
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%` (integer and float, with implicit int→float promotion)
 - **Concatenation**: `||` (text, with implicit coercion)
 - **Unary minus**: `-expr`
 - **NULL predicates**: `IS NULL`, `IS NOT NULL`
 - **Logical operators**: `AND`, `OR`, `NOT`
 - **Parentheses**: `(expr)` for grouping
-- **Literals**: integers, `'single-quoted strings'`, `TRUE`, `FALSE`, `NULL`
+- **Literals**: integers, floats (`3.14`, `.5`, `1e10`), `'single-quoted strings'`, `TRUE`, `FALSE`, `NULL`
 
 **NULL semantics.** Comparing any value to NULL with `=`, `!=`, `<`, etc. yields NULL (unknown), never true or false — matching the SQL standard. Use `IS NULL` and `IS NOT NULL` to test for NULL values.
 
@@ -847,6 +856,7 @@ mulldb/
 │   ├── scalar.go           Scalar function registry and static SELECT evaluation
 │   ├── fn_concat.go        CONCAT() implementation (registers via init())
 │   ├── fn_length.go        LENGTH() / CHARACTER_LENGTH() / CHAR_LENGTH() (registers via init())
+│   ├── fn_math.go          Math functions: ABS, ROUND, CEIL, FLOOR, POWER, SQRT, MOD (registers via init())
 │   ├── fn_now.go           NOW() implementation (registers via init())
 │   ├── fn_version.go       VERSION() implementation (registers via init())
 │   ├── result.go           Result types, QueryError, SQLSTATE mapping
@@ -922,7 +932,7 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **LEFT/RIGHT/FULL OUTER JOINs** — only INNER JOIN is supported
 - **GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
-- **Float/decimal arithmetic** — arithmetic is integer-only; no floating-point or decimal types
+- **Decimal arithmetic** — no exact-precision DECIMAL/NUMERIC types; use FLOAT for approximate numeric values
 - **Subqueries**
 - **Extended query protocol** — only SimpleQuery flow
 - **TLS/SSL** — connections are unencrypted (SSL negotiation is refused)

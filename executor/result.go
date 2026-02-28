@@ -33,6 +33,7 @@ const (
 	OIDText        int32 = 25   // TEXT
 	OIDBool        int32 = 16   // BOOLEAN
 	OIDTimestampTZ int32 = 1184 // TIMESTAMPTZ
+	OIDFloat8      int32 = 701  // FLOAT8 / DOUBLE PRECISION
 	OIDUnknown     int32 = 705  // UNKNOWN (used for NULL columns)
 )
 

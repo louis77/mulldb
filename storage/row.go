@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -18,6 +19,7 @@ const (
 	tagText      byte = 2
 	tagBoolean   byte = 3
 	tagTimestamp byte = 4
+	tagFloat     byte = 5
 )
 
 // encodeValue appends the binary encoding of v to buf.
@@ -38,6 +40,9 @@ func encodeValue(buf []byte, v any) []byte {
 			return append(buf, 1)
 		}
 		return append(buf, 0)
+	case float64:
+		buf = append(buf, tagFloat)
+		return binary.BigEndian.AppendUint64(buf, math.Float64bits(val))
 	case time.Time:
 		buf = append(buf, tagTimestamp)
 		usec := val.UnixMicro()
@@ -81,6 +86,12 @@ func decodeValue(data []byte) (any, []byte, error) {
 			return nil, nil, fmt.Errorf("truncated boolean value")
 		}
 		return data[0] != 0, data[1:], nil
+	case tagFloat:
+		if len(data) < 8 {
+			return nil, nil, fmt.Errorf("truncated float value")
+		}
+		bits := binary.BigEndian.Uint64(data[:8])
+		return math.Float64frombits(bits), data[8:], nil
 	case tagTimestamp:
 		if len(data) < 8 {
 			return nil, nil, fmt.Errorf("truncated timestamp value")

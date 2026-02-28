@@ -13,7 +13,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
 | SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). IN predicate (`IN`, `NOT IN`). Double-quoted identifiers for reserved words and case preservation. |
-| Data types | `INTEGER`, `TEXT`, `BOOLEAN`, `TIMESTAMP` (UTC-only) |
+| Data types | `INTEGER`, `FLOAT` (64-bit IEEE 754), `TEXT`, `BOOLEAN`, `TIMESTAMP` (UTC-only) |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
 | Concurrency | Per-table locking: concurrent writes to independent tables, multi-reader per table |
@@ -319,9 +319,9 @@ All features described in the README have been **verified as implemented**:
 | **Expressions** | Arithmetic (`+`, `-`, `*`, `/`, `%`, unary `-`), string concatenation (`||`), comparisons, logical operators (AND/OR/NOT), IS NULL/IS NOT NULL, IN/NOT IN |
 | **Pattern Matching** | LIKE/NOT LIKE, ILIKE/NOT ILIKE (case-insensitive), ESCAPE clause, Unicode-aware `_` and `%` |
 | **IN Predicate** | IN/NOT IN with value lists, SQL-standard three-valued NULL logic |
-| **Data Types** | INTEGER (64-bit), TEXT, BOOLEAN, TIMESTAMP (UTC-only), NULL |
+| **Data Types** | INTEGER (64-bit), FLOAT (64-bit IEEE 754, aliases: DOUBLE PRECISION), TEXT, BOOLEAN, TIMESTAMP (UTC-only), NULL |
 | **Constraints** | PRIMARY KEY (single-column only) with B-tree index enforcement |
-| **Functions** | COUNT(*)/COUNT(col), SUM, MIN, MAX, LENGTH/CHAR_LENGTH/CHARACTER_LENGTH, OCTET_LENGTH, CONCAT, NOW, VERSION |
+| **Functions** | COUNT(*)/COUNT(col), SUM, MIN, MAX, LENGTH/CHAR_LENGTH/CHARACTER_LENGTH, OCTET_LENGTH, CONCAT, NOW, VERSION, ABS, ROUND, CEIL/CEILING, FLOOR, POWER/POW, SQRT, MOD |
 | **Identifiers** | Double-quoted identifiers (preserve case, reserved words), UTF-8 throughout |
 | **Comments** | Single-line (`--`) and nested block (`/* */`) |
 | **Catalog Tables** | pg_type, pg_database, pg_namespace, information_schema.tables, information_schema.columns |

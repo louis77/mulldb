@@ -11,9 +11,10 @@ const (
 	TokenIllegal           // unrecognized character
 
 	// Literals.
-	TokenIdent  // identifier (column name, table name)
-	TokenIntLit // integer literal
-	TokenStrLit // single-quoted string literal
+	TokenIdent    // identifier (column name, table name)
+	TokenIntLit   // integer literal
+	TokenFloatLit // float literal (e.g. 3.14, .5, 1e10)
+	TokenStrLit   // single-quoted string literal
 
 	// Operators.
 	TokenEq    // =
@@ -82,6 +83,8 @@ const (
 	TokenAdd         // ADD
 	TokenColumn      // COLUMN
 	TokenIn          // IN
+	TokenFloatKW     // FLOAT (data type keyword)
+	TokenDoubleKW    // DOUBLE (first word of DOUBLE PRECISION)
 )
 
 var tokenNames = map[TokenType]string{
@@ -89,6 +92,7 @@ var tokenNames = map[TokenType]string{
 	TokenIllegal:   "ILLEGAL",
 	TokenIdent:     "IDENT",
 	TokenIntLit:    "INT",
+	TokenFloatLit:  "FLOAT_LIT",
 	TokenStrLit:    "STRING",
 	TokenEq:        "=",
 	TokenNotEq:     "!=",
@@ -152,6 +156,8 @@ var tokenNames = map[TokenType]string{
 	TokenAdd:         "ADD",
 	TokenColumn:      "COLUMN",
 	TokenIn:          "IN",
+	TokenFloatKW:     "FLOAT",
+	TokenDoubleKW:    "DOUBLE",
 }
 
 func (t TokenType) String() string {
@@ -218,6 +224,8 @@ var keywords = map[string]TokenType{
 	"ADD":         TokenAdd,
 	"COLUMN":      TokenColumn,
 	"IN":          TokenIn,
+	"FLOAT":       TokenFloatKW,
+	"DOUBLE":      TokenDoubleKW,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

@@ -2,6 +2,8 @@ package storage
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 )
 
@@ -31,7 +33,8 @@ func ParseTimestamp(s string) (time.Time, error) {
 }
 
 // coerceRowValues validates and coerces values to match the column types
-// in def. Currently only TIMESTAMP columns need coercion (string → time.Time).
+// in def. TIMESTAMP columns coerce strings to time.Time, and FLOAT columns
+// coerce strings and integers to float64.
 // Uses col.Ordinal to index into the values slice (ordinal-based storage).
 func coerceRowValues(def *TableDef, values []any) ([]any, error) {
 	for _, col := range def.Columns {
@@ -39,7 +42,8 @@ func coerceRowValues(def *TableDef, values []any) ([]any, error) {
 		if ord >= len(values) || values[ord] == nil {
 			continue
 		}
-		if col.DataType == TypeTimestamp {
+		switch col.DataType {
+		case TypeTimestamp:
 			if _, ok := values[ord].(time.Time); ok {
 				continue // already a time.Time
 			}
@@ -52,6 +56,24 @@ func coerceRowValues(def *TableDef, values []any) ([]any, error) {
 				return nil, fmt.Errorf("column %q: %w", col.Name, err)
 			}
 			values[ord] = t
+		case TypeFloat:
+			switch v := values[ord].(type) {
+			case float64:
+				continue // already float64
+			case int64:
+				values[ord] = float64(v)
+			case string:
+				f, err := strconv.ParseFloat(v, 64)
+				if err != nil {
+					return nil, fmt.Errorf("column %q: invalid float %q", col.Name, v)
+				}
+				if math.IsNaN(f) || math.IsInf(f, 0) {
+					return nil, fmt.Errorf("column %q: NaN and Infinity are not supported", col.Name)
+				}
+				values[ord] = f
+			default:
+				return nil, fmt.Errorf("column %q expects FLOAT, got %T", col.Name, values[ord])
+			}
 		}
 	}
 	return values, nil
