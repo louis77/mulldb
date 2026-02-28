@@ -12,7 +12,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Wire protocol | PostgreSQL v3 (simple query flow) |
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
-| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). Double-quoted identifiers for reserved words and case preservation. |
+| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). IN predicate (`IN`, `NOT IN`). Double-quoted identifiers for reserved words and case preservation. |
 | Data types | `INTEGER`, `TEXT`, `BOOLEAN`, `TIMESTAMP` (UTC-only) |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
@@ -302,3 +302,89 @@ This eliminates the Cartesian duplication at the source rather than pushing
 reconstruction to the client.
 
 **Prerequisites**: ~~JOIN support (parser + executor)~~ (**Done** — INNER JOIN with nested-loop execution, table aliases, qualified column references), composite/array type encoding in pgwire.
+
+---
+
+## Current State & MVP Gap Analysis
+
+### ✅ What Has Been Implemented (Verified)
+
+All features described in the README have been **verified as implemented**:
+
+| Category | Features |
+|----------|----------|
+| **Wire Protocol** | PG v3 startup handshake, cleartext auth, SimpleQuery, all message types (RowDescription, DataRow, CommandComplete, ErrorResponse, ReadyForQuery) |
+| **SQL Parser** | CREATE/DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT, UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK |
+| **SELECT Features** | WHERE, ORDER BY (multi-column, NULLs last), LIMIT/OFFSET, INNER JOIN (multi-table, aliases, qualified columns), column aliases (AS) |
+| **Expressions** | Arithmetic (`+`, `-`, `*`, `/`, `%`, unary `-`), string concatenation (`||`), comparisons, logical operators (AND/OR/NOT), IS NULL/IS NOT NULL, IN/NOT IN |
+| **Pattern Matching** | LIKE/NOT LIKE, ILIKE/NOT ILIKE (case-insensitive), ESCAPE clause, Unicode-aware `_` and `%` |
+| **IN Predicate** | IN/NOT IN with value lists, SQL-standard three-valued NULL logic |
+| **Data Types** | INTEGER (64-bit), TEXT, BOOLEAN, TIMESTAMP (UTC-only), NULL |
+| **Constraints** | PRIMARY KEY (single-column only) with B-tree index enforcement |
+| **Functions** | COUNT(*)/COUNT(col), SUM, MIN, MAX, LENGTH/CHAR_LENGTH/CHARACTER_LENGTH, OCTET_LENGTH, CONCAT, NOW, VERSION |
+| **Identifiers** | Double-quoted identifiers (preserve case, reserved words), UTF-8 throughout |
+| **Comments** | Single-line (`--`) and nested block (`/* */`) |
+| **Catalog Tables** | pg_type, pg_database, pg_namespace, information_schema.tables, information_schema.columns |
+| **Storage** | Split WAL (catalog.wal + per-table WALs), CRC32 checksums, fsync, WAL replay, WAL migration (v1→v2→v3, single→split) |
+| **Concurrency** | Per-table locking (RW mutex), concurrent writes to independent tables, multiple readers |
+| **Observability** | Statement tracing (SET trace = on/off, SHOW TRACE), SQLSTATE error codes |
+
+### 🎯 Missing Features for MVP
+
+The following features are **required** to move from "correct prototype" to "minimum viable product":
+
+#### Tier 1: Absolute Minimum (Deal-breakers for Production)
+
+| Priority | Feature | Gap Analysis | Implementation Notes |
+|----------|---------|--------------|---------------------|
+| P0 | **ACID Transactions** | `BEGIN/COMMIT/ROLLBACK` are no-ops; every statement auto-commits. Concurrent writes to the same table can leave partial state on crash. | Need transaction manager with undo log, atomic commit protocol. Current per-table locking is insufficient for atomic multi-table operations. |
+| P0 | **Secondary Indexes** | Only PRIMARY KEY has a B-tree index. All other columns require full table scans (`O(n)`). Unusable for even medium-sized tables. | Need `CREATE INDEX` DDL, index metadata in catalog, index maintenance on INSERT/UPDATE/DELETE, query optimizer to choose index vs scan. |
+| P0 | **UNIQUE Constraints** | Only PK uniqueness is enforced. Business keys (e.g., `email`, `sku`) can have duplicates. | Similar to PK but nullable. Requires index + constraint validation. |
+| P0 | **Foreign Key Constraints** | No referential integrity checking. JOIN tables can have orphaned references. | Need FK metadata in catalog, validation on INSERT/UPDATE (parent exists), cascading actions, deferred checks. |
+| P0 | **CHECK Constraints** | No data validation beyond type checking. Invalid data (e.g., negative prices) can be inserted. | Parser has expression framework; need constraint metadata, evaluation on write. |
+
+#### Tier 2: Important (Major Limitations Without These)
+
+| Priority | Feature | Gap Analysis | Implementation Notes |
+|----------|---------|--------------|---------------------|
+| P1 | **Subqueries** (`IN (SELECT ...)`, `EXISTS`, correlated) | `IN` with value lists is implemented; subquery form (`IN (SELECT ...)`) is not. Cannot express "find orders where total > avg" or "users in CA". Parser rejects subqueries entirely. | Requires AST nodes for subqueries, executor support for correlated evaluation (row-by-row subquery execution) or unnesting. |
+| P1 | **GROUP BY + HAVING** | Aggregates only work on full table. Cannot do "sales per category" or "categories with >5 items". | Need grouping operator in executor, hash-based or sort-based aggregation, HAVING filter post-aggregation. |
+| P1 | **LEFT OUTER JOIN** | Only INNER JOIN implemented. Missing rows from left table are silently dropped. | Extend parser for LEFT/RIGHT/FULL keywords, executor needs to preserve outer side rows with NULL padding. |
+| P1 | **Prepared Statements** | Only SimpleQuery protocol. No parameter binding (`$1`, `$2`). SQL injection risk, re-parsing overhead. | Need Extended Query protocol (Parse, Bind, Execute, Close), portal/cursor management, param type inference. |
+| P1 | **Savepoints** | Without transactions, partial rollback is impossible. Complex operations are all-or-nothing at statement level. | Depends on Tier 1 transactions. Need nested transaction state, partial rollback to savepoint. |
+
+#### Tier 3: Solid (Production-Grade)
+
+| Priority | Feature | Gap Analysis | Implementation Notes |
+|----------|---------|--------------|---------------------|
+| P2 | **CREATE/DROP INDEX** | Indexes only created implicitly with PK. No way to add indexes as query patterns evolve. | DDL parser extensions, catalog storage for indexes, background index build, index selection in optimizer. |
+| P2 | **Advanced ALTER TABLE** | Only ADD/DROP COLUMN. Cannot rename columns, change types, add constraints without table rebuild. | Ordinals currently immutable; need column rename metadata-only ops, type coercion for ALTER COLUMN. |
+| P2 | **Views** | No way to encapsulate complex queries. No security through abstraction. | View metadata in catalog, view expansion in executor (replace view ref with subquery). |
+| P2 | **Basic Query Optimizer** | No statistics; nested-loop joins only; no index-vs-scan decision. Query performance unpredictable. | Need table statistics (row counts, distinct values), cost model, join ordering heuristics. |
+| P2 | **Row-Level Locking / MVCC** | Current table-level RWMutex blocks all writers and prevents reader-writer concurrency on same table. | Replace table mutex with row-level locks or MVCC (multi-version concurrency control) with snapshot isolation. |
+
+### 📋 Recommended Implementation Roadmap
+
+#### Phase 6: Transactions & Constraints (MVP Core)
+1. Transaction manager with BEGIN/COMMIT/ROLLBACK
+2. Undo log for rollback
+3. UNIQUE and CHECK constraints
+4. Foreign key constraints
+
+#### Phase 7: Indexes & Performance
+1. Secondary index infrastructure (B-tree reuse)
+2. `CREATE INDEX` / `DROP INDEX`
+3. Query optimizer with cost-based index selection
+4. Row-level locking (replace table-level mutex)
+
+#### Phase 8: Advanced SQL
+1. Subqueries (uncorrelated first, then correlated)
+2. GROUP BY + HAVING
+3. LEFT/RIGHT/FULL OUTER JOIN
+4. Views
+
+#### Phase 9: Protocol & Polish
+1. Extended Query protocol (prepared statements)
+2. Savepoints
+3. Advanced ALTER TABLE operations
+4. Query statistics and EXPLAIN

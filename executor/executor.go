@@ -951,6 +951,11 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 			return compileJoinExpr(expr, scope)
 		})
 
+	case *parser.InExpr:
+		return compileInExpr(e, func(expr parser.Expr) (exprFunc, error) {
+			return compileJoinExpr(expr, scope)
+		})
+
 	case *parser.FunctionCallExpr:
 		fn, ok := scalarRegistry[e.Name]
 		if !ok {
@@ -1730,6 +1735,11 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 			return compileExpr(expr, def)
 		})
 
+	case *parser.InExpr:
+		return compileInExpr(e, func(expr parser.Expr) (exprFunc, error) {
+			return compileExpr(expr, def)
+		})
+
 	case *parser.FunctionCallExpr:
 		fn, ok := scalarRegistry[e.Name]
 		if !ok {
@@ -1851,6 +1861,45 @@ func compileLikeExpr(e *parser.LikeExpr, compile func(parser.Expr) (exprFunc, er
 			return !result
 		}
 		return result
+	}, nil
+}
+
+// compileInExpr compiles an InExpr using the provided compile function for
+// sub-expressions. This allows reuse between compileExpr and compileJoinExpr.
+func compileInExpr(e *parser.InExpr, compile func(parser.Expr) (exprFunc, error)) (exprFunc, error) {
+	lhsFn, err := compile(e.Expr)
+	if err != nil {
+		return nil, err
+	}
+	valFns := make([]exprFunc, len(e.Values))
+	for i, v := range e.Values {
+		fn, err := compile(v)
+		if err != nil {
+			return nil, err
+		}
+		valFns[i] = fn
+	}
+	not := e.Not
+	return func(r storage.Row) any {
+		lhs := lhsFn(r)
+		if lhs == nil {
+			return nil
+		}
+		hasNull := false
+		for _, vFn := range valFns {
+			v := vFn(r)
+			if v == nil {
+				hasNull = true
+				continue
+			}
+			if storage.CompareValues(lhs, v) == 0 {
+				return !not
+			}
+		}
+		if hasNull {
+			return nil
+		}
+		return not
 	}, nil
 }
 

@@ -222,6 +222,13 @@ type LikeExpr struct {
 	CaseInsensitive bool // true for ILIKE
 }
 
+// InExpr represents [NOT] IN (expr, expr, ...).
+type InExpr struct {
+	Expr   Expr
+	Values []Expr
+	Not    bool // true for NOT IN
+}
+
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
@@ -235,3 +242,4 @@ func (*AliasExpr) exprNode()         {}
 func (*IsNullExpr) exprNode()        {}
 func (*NotExpr) exprNode()           {}
 func (*LikeExpr) exprNode()          {}
+func (*InExpr) exprNode()            {}

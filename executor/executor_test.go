@@ -2130,6 +2130,167 @@ func TestExecutor_LikeDynamicPattern(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// IN / NOT IN predicate
+// -------------------------------------------------------------------------
+
+func TestExecutor_InInteger(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3), (4), (5)")
+
+	r := exec(t, e, "SELECT id FROM t WHERE id IN (2, 4)")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_InText(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('Charlie')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name IN ('Alice', 'Charlie')")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_NotIn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3), (4), (5)")
+
+	r := exec(t, e, "SELECT id FROM t WHERE id NOT IN (2, 4)")
+	if len(r.Rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(r.Rows))
+	}
+}
+
+func TestExecutor_InNullLHS(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (NULL), (3)")
+
+	// NULL IN (...) → NULL → row excluded
+	r := exec(t, e, "SELECT id FROM t WHERE id IN (1, 3)")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_InNullInList(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3)")
+
+	// 1 IN (1, NULL) → TRUE (match found before NULL matters)
+	r := exec(t, e, "SELECT id FROM t WHERE id IN (1, NULL)")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+
+	// 2 IN (1, NULL) → NULL → row excluded
+	r = exec(t, e, "SELECT id FROM t WHERE id IN (1, NULL)")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1 (match=1 only)", len(r.Rows))
+	}
+}
+
+func TestExecutor_NotInNullInList(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3)")
+
+	// The SQL gotcha: NOT IN with NULL in list.
+	// 1 NOT IN (1, NULL) → FALSE (match found → NOT TRUE = FALSE)
+	// 2 NOT IN (1, NULL) → NULL (no match, but NULL present → NULL)
+	// 3 NOT IN (1, NULL) → NULL
+	// So 0 rows should be returned.
+	r := exec(t, e, "SELECT id FROM t WHERE id NOT IN (1, NULL)")
+	if len(r.Rows) != 0 {
+		t.Fatalf("got %d rows, want 0 (NOT IN with NULL returns NULL for non-matches)", len(r.Rows))
+	}
+}
+
+func TestExecutor_InSingleValue(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3)")
+
+	r := exec(t, e, "SELECT id FROM t WHERE id IN (2)")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+}
+
+func TestExecutor_InUpdateDelete(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, val TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')")
+
+	exec(t, e, "UPDATE t SET val = 'x' WHERE id IN (1, 3)")
+	r := exec(t, e, "SELECT val FROM t WHERE val = 'x'")
+	if len(r.Rows) != 2 {
+		t.Fatalf("after UPDATE: got %d rows, want 2", len(r.Rows))
+	}
+
+	exec(t, e, "DELETE FROM t WHERE id IN (2, 4)")
+	r = exec(t, e, "SELECT * FROM t")
+	if len(r.Rows) != 2 {
+		t.Fatalf("after DELETE: got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_InJoin(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER, name TEXT)")
+	exec(t, e, "CREATE TABLE orders (user_id INTEGER, product TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')")
+	exec(t, e, "INSERT INTO orders VALUES (1, 'Widget'), (2, 'Gadget')")
+
+	r := exec(t, e, "SELECT u.name FROM users u JOIN orders o ON u.id = o.user_id WHERE o.product IN ('Widget', 'Gadget')")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_InCombinedPredicates(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie'), (4, 'Dave')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE id IN (1, 2, 3) AND name LIKE 'A%'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Alice" {
+		t.Errorf("got %q, want Alice", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_InBoolean(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (active BOOLEAN)")
+	exec(t, e, "INSERT INTO t (active) VALUES (TRUE), (FALSE), (TRUE)")
+
+	r := exec(t, e, "SELECT * FROM t WHERE active IN (TRUE)")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_InTimestamp(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (ts TIMESTAMP)")
+	exec(t, e, "INSERT INTO t (ts) VALUES ('2024-01-01'), ('2024-06-15'), ('2024-12-31')")
+
+	r := exec(t, e, "SELECT * FROM t WHERE ts IN ('2024-01-01', '2024-12-31')")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+// -------------------------------------------------------------------------
 // ALTER TABLE tests
 // -------------------------------------------------------------------------
 

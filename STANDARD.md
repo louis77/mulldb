@@ -67,7 +67,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 |----|---------|--------|
 | E061-01 | Comparison predicate | **Done** (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`) |
 | E061-02 | BETWEEN predicate | Open |
-| E061-03 | IN predicate with list of values | Open |
+| E061-03 | IN predicate with list of values | **Done** (`IN (v1, v2, ...)` and `NOT IN (v1, v2, ...)`; SQL-standard three-valued NULL logic) |
 | E061-04 | LIKE predicate | **Done** (`LIKE`, `NOT LIKE`, plus PostgreSQL `ILIKE`/`NOT ILIKE` for case-insensitive matching) |
 | E061-05 | LIKE predicate: ESCAPE clause | **Done** (`LIKE pattern ESCAPE char`; single-character escape) |
 | E061-06 | NULL predicate (IS NULL) | **Done** (`IS NULL` and `IS NOT NULL`; comparisons with NULL yield NULL per SQL standard) |
@@ -337,7 +337,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| T631 | IN predicate with one list element | Open |
+| T631 | IN predicate with one list element | **Done** (`x IN (42)` works; single-element list) |
 
 ---
 

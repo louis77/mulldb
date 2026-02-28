@@ -1863,3 +1863,124 @@ func TestParse_AlterTableAddPrimaryKeyError(t *testing.T) {
 		t.Fatal("expected error for ADD ... PRIMARY KEY")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// IN / NOT IN tests
+// ---------------------------------------------------------------------------
+
+func TestParse_In(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE id IN (1, 2, 3)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	in, ok := sel.Where.(*InExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *InExpr", sel.Where)
+	}
+	assertColumnRef(t, in.Expr, "id")
+	if in.Not {
+		t.Error("Not = true, want false")
+	}
+	if len(in.Values) != 3 {
+		t.Fatalf("len(Values) = %d, want 3", len(in.Values))
+	}
+}
+
+func TestParse_NotIn(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE id NOT IN (4, 5)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	in, ok := sel.Where.(*InExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *InExpr", sel.Where)
+	}
+	if !in.Not {
+		t.Error("Not = false, want true")
+	}
+	if len(in.Values) != 2 {
+		t.Fatalf("len(Values) = %d, want 2", len(in.Values))
+	}
+}
+
+func TestParse_InSingleValue(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x IN (42)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	in, ok := sel.Where.(*InExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *InExpr", sel.Where)
+	}
+	if len(in.Values) != 1 {
+		t.Fatalf("len(Values) = %d, want 1", len(in.Values))
+	}
+}
+
+func TestParse_InWithExpressions(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x IN (1 + 2, y)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	in := sel.Where.(*InExpr)
+	if _, ok := in.Values[0].(*BinaryExpr); !ok {
+		t.Fatalf("Values[0] = %T, want *BinaryExpr", in.Values[0])
+	}
+	if _, ok := in.Values[1].(*ColumnRef); !ok {
+		t.Fatalf("Values[1] = %T, want *ColumnRef", in.Values[1])
+	}
+}
+
+func TestParse_InWithNull(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x IN (1, NULL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	in := sel.Where.(*InExpr)
+	if len(in.Values) != 2 {
+		t.Fatalf("len(Values) = %d, want 2", len(in.Values))
+	}
+	if _, ok := in.Values[1].(*NullLit); !ok {
+		t.Fatalf("Values[1] = %T, want *NullLit", in.Values[1])
+	}
+}
+
+func TestParse_InCombinedWithAnd(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x IN (1, 2) AND y = 3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok || bin.Op != "AND" {
+		t.Fatalf("WHERE = %T (op=%v), want AND", sel.Where, bin)
+	}
+	if _, ok := bin.Left.(*InExpr); !ok {
+		t.Fatalf("left = %T, want *InExpr", bin.Left)
+	}
+}
+
+func TestParse_NotExprWithIn(t *testing.T) {
+	// "NOT x IN (...)" should parse as NOT (x IN (...))
+	stmt, err := Parse("SELECT * FROM t WHERE NOT x IN (1, 2)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	not, ok := sel.Where.(*NotExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *NotExpr", sel.Where)
+	}
+	in, ok := not.Expr.(*InExpr)
+	if !ok {
+		t.Fatalf("inner = %T, want *InExpr", not.Expr)
+	}
+	if in.Not {
+		t.Error("InExpr.Not = true, want false (NOT is outer)")
+	}
+}

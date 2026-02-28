@@ -293,7 +293,7 @@ func (p *parser) parseInsert() (*InsertStmt, error) {
 
 	var values [][]Expr
 	for {
-		row, err := p.parseValueRow()
+		row, err := p.parseParenExprList()
 		if err != nil {
 			return nil, err
 		}
@@ -307,7 +307,7 @@ func (p *parser) parseInsert() (*InsertStmt, error) {
 	return &InsertStmt{Table: ref, Columns: columns, Values: values}, nil
 }
 
-func (p *parser) parseValueRow() ([]Expr, error) {
+func (p *parser) parseParenExprList() ([]Expr, error) {
 	if _, err := p.expect(TokenLParen); err != nil {
 		return nil, err
 	}
@@ -679,6 +679,26 @@ func (p *parser) parseComparison() (Expr, error) {
 			Not:             likeNot,
 			CaseInsensitive: caseInsensitive,
 		}, nil
+	}
+
+	// [NOT] IN (expr, expr, ...)
+	inNot := false
+	if p.cur.Type == TokenNot {
+		savedPos, savedCh, savedWidth, savedCur := p.lexer.pos, p.lexer.ch, p.lexer.width, p.cur
+		p.next()
+		if p.cur.Type == TokenIn {
+			inNot = true
+		} else {
+			p.lexer.pos, p.lexer.ch, p.lexer.width, p.cur = savedPos, savedCh, savedWidth, savedCur
+		}
+	}
+	if p.cur.Type == TokenIn {
+		p.next()
+		values, err := p.parseParenExprList()
+		if err != nil {
+			return nil, err
+		}
+		return &InExpr{Expr: left, Values: values, Not: inNot}, nil
 	}
 
 	var op string
