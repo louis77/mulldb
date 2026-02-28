@@ -116,7 +116,7 @@ func Open(dataDir string, migrate bool) (Engine, error) {
 
 	// Phase 2: For each surviving table, open its WAL and replay DML.
 	for name, def := range e.catalog.tables {
-		ts, err := e.openTableState(*def, tablesDir)
+		ts, err := e.openTableState(*def, tablesDir, migrate)
 		if err != nil {
 			e.closeAll()
 			return nil, fmt.Errorf("open table %q: %w", name, err)
@@ -135,9 +135,9 @@ func Open(dataDir string, migrate bool) (Engine, error) {
 }
 
 // openTableState opens a table's WAL file and replays it to build the heap.
-func (e *engine) openTableState(def TableDef, tablesDir string) (*tableState, error) {
+func (e *engine) openTableState(def TableDef, tablesDir string, migrate bool) (*tableState, error) {
 	walPath := filepath.Join(tablesDir, tableFileName(def.Name))
-	w, err := OpenWAL(walPath, false)
+	w, err := OpenWAL(walPath, migrate)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +234,14 @@ func (h *catalogReplayHandler) OnDropTable(name string) error {
 	return h.catalog.dropTable(name)
 }
 
+func (h *catalogReplayHandler) OnAddColumn(table string, col ColumnDef) error {
+	return h.catalog.addColumn(table, col)
+}
+
+func (h *catalogReplayHandler) OnDropColumn(table string, colName string) error {
+	return h.catalog.dropColumn(table, colName)
+}
+
 func (h *catalogReplayHandler) OnInsert(string, int64, []any) error {
 	return fmt.Errorf("unexpected INSERT in catalog WAL")
 }
@@ -259,6 +267,14 @@ func (h *dmlReplayHandler) OnCreateTable(string, []ColumnDef) error {
 
 func (h *dmlReplayHandler) OnDropTable(string) error {
 	return fmt.Errorf("unexpected DROP TABLE in table WAL for %q", h.tableName)
+}
+
+func (h *dmlReplayHandler) OnAddColumn(string, ColumnDef) error {
+	return fmt.Errorf("unexpected ADD COLUMN in table WAL for %q", h.tableName)
+}
+
+func (h *dmlReplayHandler) OnDropColumn(string, string) error {
+	return fmt.Errorf("unexpected DROP COLUMN in table WAL for %q", h.tableName)
 }
 
 func (h *dmlReplayHandler) OnInsert(table string, rowID int64, values []any) error {
@@ -298,6 +314,11 @@ func (e *engine) CreateTable(name string, columns []ColumnDef) error {
 
 	if _, exists := e.catalog.getTable(name); exists {
 		return &TableExistsError{Name: name}
+	}
+
+	// Assign sequential ordinals 0..N-1.
+	for i := range columns {
+		columns[i].Ordinal = i
 	}
 
 	// Write DDL to catalog WAL.
@@ -356,6 +377,91 @@ func (e *engine) DropTable(name string) error {
 	return nil
 }
 
+func (e *engine) AddColumn(table string, col ColumnDef) error {
+	e.catalogMu.Lock()
+	defer e.catalogMu.Unlock()
+
+	ts, err := e.getTableState(table)
+	if err != nil {
+		return err
+	}
+
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.dropped {
+		return &TableNotFoundError{Name: table}
+	}
+
+	// Validate column name is not a duplicate.
+	for _, existing := range ts.heap.def.Columns {
+		if existing.Name == col.Name {
+			return &ColumnExistsError{Column: col.Name, Table: table}
+		}
+	}
+
+	// Assign ordinal.
+	col.Ordinal = ts.heap.def.NextOrdinal
+
+	// Write to catalog WAL.
+	if err := e.catalogWAL.WriteAddColumn(table, col); err != nil {
+		return fmt.Errorf("catalog WAL: %w", err)
+	}
+
+	// Update catalog + heap def.
+	e.catalog.addColumn(table, col)
+	ts.heap.def = *e.catalog.tables[table]
+	return nil
+}
+
+func (e *engine) DropColumn(table string, colName string) error {
+	e.catalogMu.Lock()
+	defer e.catalogMu.Unlock()
+
+	ts, err := e.getTableState(table)
+	if err != nil {
+		return err
+	}
+
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.dropped {
+		return &TableNotFoundError{Name: table}
+	}
+
+	// Validate: column exists, is not PK, is not last column.
+	def := e.catalog.tables[table]
+	colIdx := -1
+	for i, col := range def.Columns {
+		if col.Name == colName {
+			colIdx = i
+			break
+		}
+	}
+	if colIdx < 0 {
+		return &ColumnNotFoundError{Column: colName, Table: table}
+	}
+	if def.Columns[colIdx].PrimaryKey {
+		return fmt.Errorf("cannot drop primary key column %q", colName)
+	}
+	if len(def.Columns) <= 1 {
+		return fmt.Errorf("cannot drop the only column of table %q", table)
+	}
+
+	// Write to catalog WAL.
+	if err := e.catalogWAL.WriteDropColumn(table, colName); err != nil {
+		return fmt.Errorf("catalog WAL: %w", err)
+	}
+
+	// Update catalog.
+	e.catalog.dropColumn(table, colName)
+
+	// Update heap def.
+	ts.heap.def = *e.catalog.tables[table]
+	return nil
+}
+
 // -------------------------------------------------------------------------
 // Engine interface — read-only metadata
 // -------------------------------------------------------------------------
@@ -403,19 +509,20 @@ func (e *engine) Insert(table string, columns []string, values [][]any) (int64, 
 
 	// Pre-validate PK uniqueness for all rows before writing any WAL entries.
 	if heap.pkCol >= 0 {
+		pkColName := heap.pkColumnName()
 		seen := make(map[any]bool, len(resolvedRows))
 		for _, fullRow := range resolvedRows {
-			key := fullRow[heap.pkCol]
+			key := RowValue(fullRow, heap.pkCol)
 			if key == nil {
 				return 0, &UniqueViolationError{
 					Table:  table,
-					Column: heap.def.Columns[heap.pkCol].Name,
+					Column: pkColName,
 				}
 			}
 			if seen[key] {
 				return 0, &UniqueViolationError{
 					Table:  table,
-					Column: heap.def.Columns[heap.pkCol].Name,
+					Column: pkColName,
 					Value:  key,
 				}
 			}
@@ -423,7 +530,7 @@ func (e *engine) Insert(table string, columns []string, values [][]any) (int64, 
 			if _, exists := heap.pkIdx.Get(key); exists {
 				return 0, &UniqueViolationError{
 					Table:  table,
-					Column: heap.def.Columns[heap.pkCol].Name,
+					Column: pkColName,
 					Value:  key,
 				}
 			}
@@ -467,7 +574,8 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 		if filter != nil && !filter(row) {
 			continue
 		}
-		newValues := make([]any, len(values))
+		// Extend short rows to full ordinal width.
+		newValues := make([]any, heap.def.NextOrdinal)
 		copy(newValues, values)
 		for colName, newVal := range sets {
 			idx := heap.columnIndex(colName)
@@ -489,7 +597,7 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 
 	// Pre-validate PK uniqueness before WAL write.
 	if heap.pkCol >= 0 {
-		pkColName := heap.def.Columns[heap.pkCol].Name
+		pkColName := heap.pkColumnName()
 		if _, changing := sets[pkColName]; changing {
 			updatingIDs := make(map[int64]bool, len(updates))
 			for _, u := range updates {
@@ -498,7 +606,7 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 
 			seen := make(map[any]bool, len(updates))
 			for _, u := range updates {
-				newKey := u.Values[heap.pkCol]
+				newKey := RowValue(u.Values, heap.pkCol)
 				if newKey == nil {
 					return 0, &UniqueViolationError{Table: table, Column: pkColName}
 				}
@@ -609,9 +717,9 @@ func (e *engine) acquireTableRead(name string) (*tableState, error) {
 	return ts, nil
 }
 
-// resolveInsertRow maps named columns + values to a full row in column
-// order, filling unspecified columns with nil (NULL). When columns is nil
-// the values are used directly (must match the table width).
+// resolveInsertRow maps named columns + values to a full row in ordinal
+// order, filling unspecified positions with nil (NULL). When columns is nil
+// the values are mapped positionally via def.Columns[i].Ordinal.
 func resolveInsertRow(heap *tableHeap, columns []string, values []any) ([]any, error) {
 	def := &heap.def
 
@@ -619,10 +727,15 @@ func resolveInsertRow(heap *tableHeap, columns []string, values []any) ([]any, e
 		if len(values) != len(def.Columns) {
 			return nil, &ValueCountError{Expected: len(def.Columns), Got: len(values)}
 		}
-		return coerceRowValues(def, values)
+		// Map positional values to their ordinal positions.
+		row := make([]any, def.NextOrdinal)
+		for i, col := range def.Columns {
+			row[col.Ordinal] = values[i]
+		}
+		return coerceRowValues(def, row)
 	}
 
-	row := make([]any, len(def.Columns))
+	row := make([]any, def.NextOrdinal)
 	for i, colName := range columns {
 		idx := heap.columnIndex(colName)
 		if idx < 0 {

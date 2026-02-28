@@ -40,7 +40,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
-- **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
+- **SQL support** — CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
@@ -138,6 +138,10 @@ CREATE TABLE <name> (<column> <type> PRIMARY KEY, ...);  -- with primary key
 
 -- Drop a table
 DROP TABLE <name>;
+
+-- Alter a table
+ALTER TABLE <name> ADD [COLUMN] <column> <type>;
+ALTER TABLE <name> DROP [COLUMN] <column>;
 
 -- Insert one or more rows
 INSERT INTO <table> (<columns>) VALUES (<values>), (<values>);
@@ -906,7 +910,6 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **LEFT/RIGHT/FULL OUTER JOINs** — only INNER JOIN is supported
 - **GROUP BY / HAVING**
 - **AVG** — not implemented (use `SUM` / `COUNT` manually)
-- **ALTER TABLE**
 - **Float/decimal arithmetic** — arithmetic is integer-only; no floating-point or decimal types
 - **Subqueries**
 - **Extended query protocol** — only SimpleQuery flow

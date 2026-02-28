@@ -78,6 +78,9 @@ const (
 	TokenIlike       // ILIKE
 	TokenEscape      // ESCAPE
 	TokenTimestampKW // TIMESTAMP / TIMESTAMPTZ
+	TokenAlter       // ALTER
+	TokenAdd         // ADD
+	TokenColumn      // COLUMN
 )
 
 var tokenNames = map[TokenType]string{
@@ -144,6 +147,9 @@ var tokenNames = map[TokenType]string{
 	TokenIlike:       "ILIKE",
 	TokenEscape:      "ESCAPE",
 	TokenTimestampKW: "TIMESTAMP",
+	TokenAlter:       "ALTER",
+	TokenAdd:         "ADD",
+	TokenColumn:      "COLUMN",
 }
 
 func (t TokenType) String() string {
@@ -206,6 +212,9 @@ var keywords = map[string]TokenType{
 	"ESCAPE":      TokenEscape,
 	"TIMESTAMP":   TokenTimestampKW,
 	"TIMESTAMPTZ": TokenTimestampKW,
+	"ALTER":       TokenAlter,
+	"ADD":         TokenAdd,
+	"COLUMN":      TokenColumn,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

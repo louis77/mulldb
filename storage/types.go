@@ -32,23 +32,35 @@ type ColumnDef struct {
 	Name       string
 	DataType   DataType
 	PrimaryKey bool
+	Ordinal    int // permanent position index; never reused after DROP COLUMN
 }
 
 // TableDef describes the schema of a table.
 type TableDef struct {
-	Name    string
-	Columns []ColumnDef
+	Name        string
+	Columns     []ColumnDef
+	NextOrdinal int // next ordinal to assign on ADD COLUMN
 }
 
-// PrimaryKeyColumn returns the index of the primary key column,
+// PrimaryKeyColumn returns the ordinal of the primary key column,
 // or -1 if the table has no primary key.
 func (d *TableDef) PrimaryKeyColumn() int {
-	for i, col := range d.Columns {
+	for _, col := range d.Columns {
 		if col.PrimaryKey {
-			return i
+			return col.Ordinal
 		}
 	}
 	return -1
+}
+
+// RowValue returns the value at the given ordinal from a row's values
+// slice. If the row is shorter than the ordinal (e.g. row predates an
+// ADD COLUMN), it returns nil (NULL).
+func RowValue(values []any, ordinal int) any {
+	if ordinal < len(values) {
+		return values[ordinal]
+	}
+	return nil
 }
 
 // Row is a single row of data with an internal ID.
@@ -114,11 +126,23 @@ func (e *UniqueViolationError) Error() string {
 	return fmt.Sprintf("duplicate key value violates unique constraint on column %q of table %q", e.Column, e.Table)
 }
 
+// ColumnExistsError is returned when adding a column that already exists.
+type ColumnExistsError struct {
+	Column string
+	Table  string
+}
+
+func (e *ColumnExistsError) Error() string {
+	return fmt.Sprintf("column %q of relation %q already exists", e.Column, e.Table)
+}
+
 // Engine is the storage layer interface. The executor depends on this
 // contract, never on the concrete implementation.
 type Engine interface {
 	CreateTable(name string, columns []ColumnDef) error
 	DropTable(name string) error
+	AddColumn(table string, col ColumnDef) error
+	DropColumn(table string, colName string) error
 	GetTable(name string) (*TableDef, bool)
 	ListTables() []*TableDef
 	Insert(table string, columns []string, values [][]any) (int64, error)

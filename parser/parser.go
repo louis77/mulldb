@@ -69,6 +69,8 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseCreateTable()
 	case TokenDrop:
 		return p.parseDropTable()
+	case TokenAlter:
+		return p.parseAlterTable()
 	case TokenInsert:
 		return p.parseInsert()
 	case TokenSelect:
@@ -209,6 +211,50 @@ func (p *parser) parseDropTable() (*DropTableStmt, error) {
 		return nil, err
 	}
 	return &DropTableStmt{Name: ref}, nil
+}
+
+func (p *parser) parseAlterTable() (Statement, error) {
+	p.next() // skip ALTER
+	if _, err := p.expect(TokenTable); err != nil {
+		return nil, err
+	}
+	ref, err := p.parseTableRef()
+	if err != nil {
+		return nil, err
+	}
+
+	switch p.cur.Type {
+	case TokenAdd:
+		p.next() // skip ADD
+		// Optional COLUMN keyword.
+		if p.cur.Type == TokenColumn {
+			p.next()
+		}
+		col, err := p.parseColumnDef()
+		if err != nil {
+			return nil, err
+		}
+		if col.PrimaryKey {
+			return nil, fmt.Errorf("cannot add a PRIMARY KEY column via ALTER TABLE")
+		}
+		return &AlterTableAddColumnStmt{Table: ref, Column: col}, nil
+
+	case TokenDrop:
+		p.next() // skip DROP
+		// Optional COLUMN keyword.
+		if p.cur.Type == TokenColumn {
+			p.next()
+		}
+		name, err := p.expect(TokenIdent)
+		if err != nil {
+			return nil, err
+		}
+		return &AlterTableDropColumnStmt{Table: ref, Column: name.Literal}, nil
+
+	default:
+		return nil, fmt.Errorf("expected ADD or DROP after ALTER TABLE, got %q at position %d",
+			p.cur.Literal, p.cur.Pos)
+	}
 }
 
 func (p *parser) parseInsert() (*InsertStmt, error) {

@@ -12,7 +12,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Wire protocol | PostgreSQL v3 (simple query flow) |
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
-| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). Double-quoted identifiers for reserved words and case preservation. |
+| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). Double-quoted identifiers for reserved words and case preservation. |
 | Data types | `INTEGER`, `TEXT`, `BOOLEAN`, `TIMESTAMP` (UTC-only) |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
@@ -34,7 +34,7 @@ type Parser interface {
 }
 
 // Statement is the AST union type returned by the parser
-// Concrete types: CreateTableStmt, DropTableStmt, InsertStmt, SelectStmt, UpdateStmt, DeleteStmt
+// Concrete types: CreateTableStmt, DropTableStmt, AlterTableAddColumnStmt, AlterTableDropColumnStmt, InsertStmt, SelectStmt, UpdateStmt, DeleteStmt
 type Statement interface {
     statementNode()
 }
@@ -43,6 +43,8 @@ type Statement interface {
 type Engine interface {
     CreateTable(name string, columns []ColumnDef) error
     DropTable(name string) error
+    AddColumn(table string, col ColumnDef) error
+    DropColumn(table string, colName string) error
     Insert(table string, columns []string, values [][]Value) (int64, error)
     Scan(table string) (RowIterator, error)
     Update(table string, sets map[string]Value, filter func(Row) bool) (int64, error)

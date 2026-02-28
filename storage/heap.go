@@ -36,21 +36,31 @@ func (h *tableHeap) allocateID() int64 {
 	return id
 }
 
+// pkColumnName returns the name of the primary key column, or "".
+func (h *tableHeap) pkColumnName() string {
+	for _, col := range h.def.Columns {
+		if col.Ordinal == h.pkCol {
+			return col.Name
+		}
+	}
+	return ""
+}
+
 // insertWithID stores a row with a specific ID (used by both live inserts
 // and WAL replay). Returns an error if the row violates a PK constraint.
 func (h *tableHeap) insertWithID(id int64, values []any) error {
 	if h.pkIdx != nil {
-		key := values[h.pkCol]
+		key := RowValue(values, h.pkCol)
 		if key == nil {
 			return &UniqueViolationError{
 				Table:  h.def.Name,
-				Column: h.def.Columns[h.pkCol].Name,
+				Column: h.pkColumnName(),
 			}
 		}
 		if !h.pkIdx.Put(key, id) {
 			return &UniqueViolationError{
 				Table:  h.def.Name,
-				Column: h.def.Columns[h.pkCol].Name,
+				Column: h.pkColumnName(),
 				Value:  key,
 			}
 		}
@@ -69,7 +79,7 @@ func (h *tableHeap) deleteRows(ids []int64) {
 	for _, id := range ids {
 		if h.pkIdx != nil {
 			if vals, ok := h.rows[id]; ok {
-				h.pkIdx.Delete(vals[h.pkCol])
+				h.pkIdx.Delete(RowValue(vals, h.pkCol))
 			}
 		}
 		delete(h.rows, id)
@@ -81,13 +91,13 @@ func (h *tableHeap) deleteRows(ids []int64) {
 func (h *tableHeap) updateRow(id int64, values []any) error {
 	if h.pkIdx != nil {
 		oldVals := h.rows[id]
-		oldKey := oldVals[h.pkCol]
-		newKey := values[h.pkCol]
+		oldKey := RowValue(oldVals, h.pkCol)
+		newKey := RowValue(values, h.pkCol)
 		if CompareValues(oldKey, newKey) != 0 {
 			if newKey == nil {
 				return &UniqueViolationError{
 					Table:  h.def.Name,
-					Column: h.def.Columns[h.pkCol].Name,
+					Column: h.pkColumnName(),
 				}
 			}
 			// PK value is changing: remove old, try inserting new.
@@ -97,7 +107,7 @@ func (h *tableHeap) updateRow(id int64, values []any) error {
 				h.pkIdx.Put(oldKey, id)
 				return &UniqueViolationError{
 					Table:  h.def.Name,
-					Column: h.def.Columns[h.pkCol].Name,
+					Column: h.pkColumnName(),
 					Value:  newKey,
 				}
 			}
@@ -138,11 +148,11 @@ func (h *tableHeap) scan() RowIterator {
 	return &sliceIterator{rows: rows}
 }
 
-// columnIndex returns the position of the named column, or -1.
+// columnIndex returns the ordinal of the named column, or -1.
 func (h *tableHeap) columnIndex(name string) int {
-	for i, col := range h.def.Columns {
+	for _, col := range h.def.Columns {
 		if col.Name == name {
-			return i
+			return col.Ordinal
 		}
 	}
 	return -1

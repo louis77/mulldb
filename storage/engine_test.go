@@ -1092,3 +1092,243 @@ func BenchmarkSumScan(b *testing.B) {
 		_ = sum
 	}
 }
+
+// -------------------------------------------------------------------------
+// ALTER TABLE (ADD COLUMN / DROP COLUMN)
+// -------------------------------------------------------------------------
+
+func TestEngine_AddColumn(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+	})
+	eng.Insert("t", nil, [][]any{{int64(1)}})
+
+	// Add a column.
+	if err := eng.AddColumn("t", ColumnDef{Name: "name", DataType: TypeText}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Old rows should return NULL for the new column.
+	rows := collectRows(t, must(eng.Scan("t")))
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	// New column ordinal = 1, row length = 1 (short row), so RowValue should return nil.
+	if RowValue(rows[0].Values, 1) != nil {
+		t.Errorf("new column = %v, want nil", RowValue(rows[0].Values, 1))
+	}
+
+	// Insert with the new column.
+	eng.Insert("t", []string{"id", "name"}, [][]any{{int64(2), "alice"}})
+	rows = collectRows(t, must(eng.Scan("t")))
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+}
+
+func TestEngine_DropColumn(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+		{Name: "name", DataType: TypeText},
+	})
+	eng.Insert("t", nil, [][]any{{int64(1), "alice"}})
+
+	if err := eng.DropColumn("t", "name"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Schema should only have one column.
+	def, ok := eng.GetTable("t")
+	if !ok {
+		t.Fatal("table not found")
+	}
+	if len(def.Columns) != 1 {
+		t.Fatalf("got %d columns, want 1", len(def.Columns))
+	}
+	if def.Columns[0].Name != "id" {
+		t.Errorf("remaining column = %q, want id", def.Columns[0].Name)
+	}
+}
+
+func TestEngine_DropColumn_PK_Error(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "id", DataType: TypeInteger, PrimaryKey: true},
+		{Name: "name", DataType: TypeText},
+	})
+
+	err := eng.DropColumn("t", "id")
+	if err == nil {
+		t.Fatal("expected error for dropping PK column")
+	}
+}
+
+func TestEngine_DropColumn_LastColumn_Error(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+	})
+
+	err := eng.DropColumn("t", "id")
+	if err == nil {
+		t.Fatal("expected error for dropping last column")
+	}
+}
+
+func TestEngine_AddColumn_Duplicate_Error(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+	})
+
+	err := eng.AddColumn("t", ColumnDef{Name: "id", DataType: TypeText})
+	if err == nil {
+		t.Fatal("expected error for duplicate column")
+	}
+	var colExists *ColumnExistsError
+	if !errors.As(err, &colExists) {
+		t.Errorf("got error %T, want *ColumnExistsError", err)
+	}
+}
+
+func TestEngine_DropColumn_NotFound_Error(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+	})
+
+	err := eng.DropColumn("t", "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for dropping non-existent column")
+	}
+}
+
+func TestEngine_AddDropColumn_WAL_Replay(t *testing.T) {
+	dir := tempDir(t)
+
+	// Create, insert, add column, insert again, drop column.
+	eng := openEngine(t, dir)
+	eng.CreateTable("t", []ColumnDef{
+		{Name: "a", DataType: TypeInteger},
+		{Name: "b", DataType: TypeText},
+	})
+	eng.Insert("t", nil, [][]any{{int64(1), "x"}})
+	eng.AddColumn("t", ColumnDef{Name: "c", DataType: TypeInteger})
+	eng.Insert("t", []string{"a", "b", "c"}, [][]any{{int64(2), "y", int64(42)}})
+	eng.DropColumn("t", "b")
+	eng.Close()
+
+	// Reopen and verify.
+	eng = openEngine(t, dir)
+	defer eng.Close()
+
+	def, ok := eng.GetTable("t")
+	if !ok {
+		t.Fatal("table not found after replay")
+	}
+	if len(def.Columns) != 2 {
+		t.Fatalf("got %d columns, want 2 (a, c)", len(def.Columns))
+	}
+	if def.Columns[0].Name != "a" || def.Columns[1].Name != "c" {
+		t.Errorf("columns = [%s, %s], want [a, c]", def.Columns[0].Name, def.Columns[1].Name)
+	}
+
+	rows := collectRows(t, must(eng.Scan("t")))
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+}
+
+func TestEngine_MigrateV2ToV3(t *testing.T) {
+	dir := tempDir(t)
+	os.MkdirAll(filepath.Join(dir, "tables"), 0755)
+
+	// Write a v2 catalog WAL manually.
+	catPath := filepath.Join(dir, "catalog.wal")
+	f, err := os.Create(catPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write v2 header.
+	var hdr [6]byte
+	copy(hdr[:4], "MWAL")
+	hdr[4] = 0
+	hdr[5] = 2
+	f.Write(hdr[:])
+
+	// Write a v2 CREATE TABLE entry (no ordinals).
+	cols := []ColumnDef{
+		{Name: "id", DataType: TypeInteger, PrimaryKey: true},
+		{Name: "name", DataType: TypeText},
+	}
+	buf := encodeString(nil, "users")
+	buf = appendUint16(buf, uint16(len(cols)))
+	for _, col := range cols {
+		buf = encodeString(buf, col.Name)
+		buf = append(buf, byte(col.DataType))
+		var pk byte
+		if col.PrimaryKey {
+			pk = 1
+		}
+		buf = append(buf, pk)
+		// v2 does NOT have ordinal — that's what migration adds
+	}
+	writeRawEntry(f, 1, buf) // opCreateTable = 1
+	f.Close()
+
+	// Create empty table WAL.
+	tablePath := filepath.Join(dir, "tables", "users.wal")
+	tf, _ := os.Create(tablePath)
+	writeWALHeader(tf)
+	tf.Close()
+
+	// Open with migrate=true — should migrate v2→v3.
+	eng, err := Open(dir, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer eng.Close()
+
+	def, ok := eng.GetTable("users")
+	if !ok {
+		t.Fatal("table not found after migration")
+	}
+	if len(def.Columns) != 2 {
+		t.Fatalf("got %d columns, want 2", len(def.Columns))
+	}
+	// Ordinals should be assigned sequentially by migration.
+	if def.Columns[0].Ordinal != 0 {
+		t.Errorf("col[0].Ordinal = %d, want 0", def.Columns[0].Ordinal)
+	}
+	if def.Columns[1].Ordinal != 1 {
+		t.Errorf("col[1].Ordinal = %d, want 1", def.Columns[1].Ordinal)
+	}
+	if def.NextOrdinal != 2 {
+		t.Errorf("NextOrdinal = %d, want 2", def.NextOrdinal)
+	}
+}
+
+// appendUint16 is a test helper for encoding uint16 big-endian.
+func appendUint16(buf []byte, v uint16) []byte {
+	return append(buf, byte(v>>8), byte(v))
+}

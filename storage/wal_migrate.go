@@ -20,6 +20,7 @@ type entryMigrateFunc func(op byte, payload []byte) (byte, []byte, error)
 // functions are applied sequentially (v1→v2, v2→v3, …).
 var walMigrations = map[uint16]entryMigrateFunc{
 	1: migrateV1ToV2,
+	2: migrateV2ToV3,
 }
 
 // rawEntry is an undecoded WAL entry (op + payload, CRC already verified).
@@ -266,6 +267,61 @@ func migrateV1ToV2(op byte, payload []byte) (byte, []byte, error) {
 	return op, buf, nil
 }
 
+// migrateV2ToV3 adds the ordinal (uint16) to each column in CREATE TABLE
+// entries. Ordinals are assigned sequentially (0, 1, 2, ...).
+// All other entry types pass through unchanged.
+//
+// v2 CREATE TABLE column format: [string name][byte dataType][byte pkFlag]
+// v3 CREATE TABLE column format: [string name][byte dataType][byte pkFlag][uint16 ordinal]
+func migrateV2ToV3(op byte, payload []byte) (byte, []byte, error) {
+	if op != opCreateTable {
+		return op, payload, nil
+	}
+
+	// Decode table name.
+	name, rest, err := decodeString(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("decode table name: %w", err)
+	}
+	if len(rest) < 2 {
+		return 0, nil, fmt.Errorf("truncated column count")
+	}
+	count := binary.BigEndian.Uint16(rest[:2])
+	rest = rest[2:]
+
+	// Decode columns in v2 format (with PK flag, no ordinal).
+	type v2Col struct {
+		Name     string
+		DataType byte
+		PK       byte
+	}
+	cols := make([]v2Col, count)
+	for i := range cols {
+		cols[i].Name, rest, err = decodeString(rest)
+		if err != nil {
+			return 0, nil, fmt.Errorf("column %d name: %w", i, err)
+		}
+		if len(rest) < 2 {
+			return 0, nil, fmt.Errorf("column %d: truncated data type/pk", i)
+		}
+		cols[i].DataType = rest[0]
+		cols[i].PK = rest[1]
+		rest = rest[2:]
+	}
+
+	// Re-encode in v3 format (with ordinal).
+	buf := encodeString(nil, name)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(count))
+	for i, col := range cols {
+		buf = encodeString(buf, col.Name)
+		buf = append(buf, col.DataType)
+		buf = append(buf, col.PK)
+		buf = binary.BigEndian.AppendUint16(buf, uint16(i)) // ordinal = sequential
+	}
+
+	return op, buf, nil
+}
+
 // -------------------------------------------------------------------------
 // Single-WAL → Split-WAL migration
 // -------------------------------------------------------------------------
@@ -319,6 +375,10 @@ func migrateToSplitWAL(dataDir string) error {
 			}
 			delete(alive, name)
 			delete(dmlByTable, name) // discard DML for dropped tables
+
+		case opAddColumn, opDropColumn:
+			// ALTER TABLE ops are DDL — go to catalog WAL.
+			ddlEntries = append(ddlEntries, e)
 
 		case opInsert, opDelete, opUpdate:
 			name, _, err := decodeString(e.Payload)

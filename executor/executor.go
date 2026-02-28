@@ -105,6 +105,18 @@ func (e *Executor) execute(sql string, tr *Trace) (*Result, error) {
 			tr.StmtType = "ROLLBACK"
 		}
 		return &Result{Tag: "ROLLBACK"}, nil
+	case *parser.AlterTableAddColumnStmt:
+		if tr != nil {
+			tr.StmtType = "ALTER TABLE"
+			tr.Table = s.Table.Name
+		}
+		return e.execAlterTableAddColumn(s, tr)
+	case *parser.AlterTableDropColumnStmt:
+		if tr != nil {
+			tr.StmtType = "ALTER TABLE"
+			tr.Table = s.Table.Name
+		}
+		return e.execAlterTableDropColumn(s, tr)
 	default:
 		return nil, &QueryError{Code: "42601", Message: fmt.Sprintf("unsupported statement type %T", stmt)}
 	}
@@ -164,6 +176,57 @@ func (e *Executor) execDropTable(s *parser.DropTableStmt, tr *Trace) (*Result, e
 	}
 
 	return &Result{Tag: "DROP TABLE"}, nil
+}
+
+func (e *Executor) execAlterTableAddColumn(s *parser.AlterTableAddColumnStmt, tr *Trace) (*Result, error) {
+	if isCatalogTable(s.Table.Schema, s.Table.Name) {
+		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot alter catalog table %q", s.Table.String())}
+	}
+
+	dt, err := parseDataType(s.Column.DataType)
+	if err != nil {
+		return nil, WrapError(err)
+	}
+	col := storage.ColumnDef{
+		Name:     s.Column.Name,
+		DataType: dt,
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
+	if err := e.engine.AddColumn(s.Table.Name, col); err != nil {
+		return nil, WrapError(err)
+	}
+
+	if tr != nil {
+		tr.Exec = time.Since(execStart)
+	}
+
+	return &Result{Tag: "ALTER TABLE"}, nil
+}
+
+func (e *Executor) execAlterTableDropColumn(s *parser.AlterTableDropColumnStmt, tr *Trace) (*Result, error) {
+	if isCatalogTable(s.Table.Schema, s.Table.Name) {
+		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot alter catalog table %q", s.Table.String())}
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
+	if err := e.engine.DropColumn(s.Table.Name, s.Column); err != nil {
+		return nil, WrapError(err)
+	}
+
+	if tr != nil {
+		tr.Exec = time.Since(execStart)
+	}
+
+	return &Result{Tag: "ALTER TABLE"}, nil
 }
 
 func (e *Executor) execInsert(s *parser.InsertStmt, tr *Trace) (*Result, error) {
@@ -402,8 +465,8 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		}
 		sort.SliceStable(matched, func(i, j int) bool {
 			for _, key := range orderKeys {
-				av := matched[i].Values[key.colIdx]
-				bv := matched[j].Values[key.colIdx]
+				av := storage.RowValue(matched[i].Values, key.colIdx)
+				bv := storage.RowValue(matched[j].Values, key.colIdx)
 
 				// NULLs always sort last regardless of direction.
 				if av == nil && bv == nil {
@@ -537,7 +600,7 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 					return nil, WrapError(fmt.Errorf("column %q not found in table %q", arg.Name, def.Name))
 				}
 				acc.colIdx = idx
-				acc.inputType = def.Columns[idx].DataType
+				acc.inputType = columnByOrdinal(def, idx).DataType
 			}
 		}
 
@@ -603,15 +666,15 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		for _, acc := range accs {
 			switch acc.funcName {
 			case "COUNT":
-				if acc.colIdx < 0 || row.Values[acc.colIdx] != nil {
+				if acc.colIdx < 0 || storage.RowValue(row.Values, acc.colIdx) != nil {
 					acc.count++
 				}
 			case "SUM":
-				if v, ok := row.Values[acc.colIdx].(int64); ok {
+				if v, ok := storage.RowValue(row.Values, acc.colIdx).(int64); ok {
 					acc.sumI += v
 				}
 			case "MIN":
-				v := row.Values[acc.colIdx]
+				v := storage.RowValue(row.Values, acc.colIdx)
 				if v == nil {
 					continue
 				}
@@ -620,7 +683,7 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 					acc.hasV = true
 				}
 			case "MAX":
-				v := row.Values[acc.colIdx]
+				v := storage.RowValue(row.Values, acc.colIdx)
 				if v == nil {
 					continue
 				}
@@ -823,7 +886,7 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 		if err != nil {
 			return nil, err
 		}
-		return func(r storage.Row) any { return r.Values[idx] }, nil
+		return func(r storage.Row) any { return storage.RowValue(r.Values, idx) }, nil
 
 	case *parser.IntegerLit:
 		v := e.Value
@@ -1081,7 +1144,7 @@ func resolveJoinSelectColumns(exprs []parser.Expr, scope *joinScope) ([]exprFunc
 		case *parser.StarExpr:
 			for i, c := range scope.columns {
 				idx := i
-				evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
+				evals = append(evals, func(r storage.Row) any { return storage.RowValue(r.Values, idx) })
 				cols = append(cols, Column{
 					Name:     c.name,
 					TypeOID:  typeOID(c.def.DataType),
@@ -1094,7 +1157,7 @@ func resolveJoinSelectColumns(exprs []parser.Expr, scope *joinScope) ([]exprFunc
 				return nil, nil, err
 			}
 			c := scope.columns[idx]
-			evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
+			evals = append(evals, func(r storage.Row) any { return storage.RowValue(r.Values, idx) })
 			name := c.name
 			if alias != "" {
 				name = alias
@@ -1258,12 +1321,12 @@ func (e *Executor) execSelectJoin(s *parser.SelectStmt, tr *Trace) (*Result, err
 			return
 		}
 
-		offset := scope.tables[tableIdx].offset
-		numCols := len(scope.tables[tableIdx].def.Columns)
+		off := scope.tables[tableIdx].offset
+		tableCols := scope.tables[tableIdx].def.Columns
 		for _, row := range tableRows[tableIdx] {
 			// Place this table's values into the merged row.
-			for j := 0; j < numCols; j++ {
-				current[offset+j] = row.Values[j]
+			for j, col := range tableCols {
+				current[off+j] = storage.RowValue(row.Values, col.Ordinal)
 			}
 			joinLoop(tableIdx+1, current)
 		}
@@ -1284,8 +1347,8 @@ func (e *Executor) execSelectJoin(s *parser.SelectStmt, tr *Trace) (*Result, err
 		}
 		sort.SliceStable(matched, func(i, j int) bool {
 			for _, key := range orderKeys {
-				av := matched[i].Values[key.colIdx]
-				bv := matched[j].Values[key.colIdx]
+				av := storage.RowValue(matched[i].Values, key.colIdx)
+				bv := storage.RowValue(matched[j].Values, key.colIdx)
 				if av == nil && bv == nil {
 					continue
 				}
@@ -1471,9 +1534,9 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 
 		switch e := inner.(type) {
 		case *parser.StarExpr:
-			for i, c := range def.Columns {
-				idx := i
-				evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
+			for _, c := range def.Columns {
+				ord := c.Ordinal
+				evals = append(evals, func(r storage.Row) any { return storage.RowValue(r.Values, ord) })
 				cols = append(cols, Column{
 					Name:     c.Name,
 					TypeOID:  typeOID(c.DataType),
@@ -1485,8 +1548,8 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 			if idx < 0 {
 				return nil, nil, fmt.Errorf("column %q not found in table %q", e.Name, def.Name)
 			}
-			c := def.Columns[idx]
-			evals = append(evals, func(r storage.Row) any { return r.Values[idx] })
+			c := columnByOrdinal(def, idx)
+			evals = append(evals, func(r storage.Row) any { return storage.RowValue(r.Values, idx) })
 			name := c.Name
 			if alias != "" {
 				name = alias
@@ -1602,7 +1665,7 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 		if idx < 0 {
 			return nil, fmt.Errorf("column %q not found", e.Name)
 		}
-		return func(r storage.Row) any { return r.Values[idx] }, nil
+		return func(r storage.Row) any { return storage.RowValue(r.Values, idx) }, nil
 
 	case *parser.IntegerLit:
 		v := e.Value
@@ -2036,12 +2099,22 @@ func parseDataType(s string) (storage.DataType, error) {
 }
 
 func columnIndex(def *storage.TableDef, name string) int {
-	for i, c := range def.Columns {
+	for _, c := range def.Columns {
 		if strings.EqualFold(c.Name, name) {
-			return i
+			return c.Ordinal
 		}
 	}
 	return -1
+}
+
+// columnByOrdinal returns the ColumnDef with the given ordinal, or a zero value.
+func columnByOrdinal(def *storage.TableDef, ordinal int) storage.ColumnDef {
+	for _, c := range def.Columns {
+		if c.Ordinal == ordinal {
+			return c
+		}
+	}
+	return storage.ColumnDef{}
 }
 
 func aggregateTypeOID(funcName string, inputType storage.DataType) int32 {

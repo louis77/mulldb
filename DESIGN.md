@@ -118,6 +118,8 @@ The storage layer exposes an `Engine` interface that the executor depends on:
 type Engine interface {
     CreateTable(name string, columns []ColumnDef) error
     DropTable(name string) error
+    AddColumn(table string, col ColumnDef) error
+    DropColumn(table string, colName string) error
     GetTable(name string) (*TableDef, bool)
     ListTables() []*TableDef
     Insert(table string, columns []string, values [][]any) (int64, error)
@@ -206,6 +208,8 @@ The WAL binary format evolves as features are added. When a new version of the b
 **Safe file handling.** Migration reads all entries from the old file, transforms them, and writes a new file (`wal.dat.mig`) with the current-version header and migrated entries. After fsync, the original is renamed to `wal.dat.bak` (preserving it as a backup), and the new file is moved into place. If a `.bak` file already exists, a numbered suffix is used (`.bak.1`, `.bak.2`, etc.). The user is told they can manually delete the backup after verifying. If the process crashes mid-migration, the original file is still intact.
 
 The first migration (v1→v2) handles the addition of the primary key flag byte to CreateTable column entries. Old columns get `PrimaryKey: false` since the concept didn't exist in v1.
+
+The second migration (v2→v3) adds ordinal fields to CreateTable column entries. Each column gets a sequential ordinal (0, 1, 2, ...) matching its position in the original schema. This enables ordinal-based column storage for instant ALTER TABLE operations.
 
 **Split WAL migration.** When the engine detects a legacy single `wal.dat` file (and no `catalog.wal`), it requires a structural migration to the per-table layout. The migration reads all entries from `wal.dat`, classifies them as DDL or DML, tracks which tables survive after all CREATE/DROP sequences, and writes: `catalog.wal` (all DDL entries), plus `tables/<name>.wal` for each surviving table (only that table's DML entries). DML for dropped tables is discarded, immediately reclaiming space. The original `wal.dat` is preserved as `wal.dat.bak`. If the legacy file also needs a format version upgrade (e.g. v1→v2), that migration runs first, then the split migration follows.
 
@@ -323,6 +327,56 @@ Parse errors get SQLSTATE `42601` (syntax error). Unknown statement types get `4
 Each TCP connection gets its own goroutine. The lifecycle is: startup (SSL negotiation, authentication, parameter exchange), then a query loop until the client sends Terminate or the connection drops. Goroutines are tracked with a `sync.WaitGroup` for graceful shutdown.
 
 On shutdown (SIGINT/SIGTERM), the server closes the listener (stopping new connections), signals the accept loop to exit, and waits for in-flight goroutines to finish with a 5-second timeout. This ensures clients get clean responses to in-flight queries rather than a TCP reset.
+
+## Ordinal-Based Column Storage
+
+mulldb uses ordinal-based column storage to make `ALTER TABLE ADD COLUMN` and `ALTER TABLE DROP COLUMN` instant — no table WAL rewrite, no per-row restructuring.
+
+### How It Works
+
+Each column is assigned a permanent **ordinal** — a monotonically increasing integer that is never reused, even after the column is dropped. The `TableDef` tracks the next ordinal to assign via `NextOrdinal`. Rows are stored as `[]any` slices indexed by ordinal position.
+
+```go
+type ColumnDef struct {
+    Name       string
+    DataType   DataType
+    PrimaryKey bool
+    Ordinal    int   // permanent position; never reused after DROP
+}
+
+type TableDef struct {
+    Name        string
+    Columns     []ColumnDef
+    NextOrdinal int   // next ordinal to assign on ADD COLUMN
+}
+```
+
+When a new column is added, it receives the next available ordinal and `NextOrdinal` is incremented. Existing rows are not modified — they remain shorter than the current schema. The `RowValue` helper handles this: if the ordinal is beyond the row's length, it returns `nil` (SQL NULL).
+
+```go
+func RowValue(values []any, ordinal int) any {
+    if ordinal < len(values) { return values[ordinal] }
+    return nil
+}
+```
+
+When a column is dropped, its ordinal becomes "dead" — values at that position in existing rows are never read. The column is simply removed from the `TableDef.Columns` slice. New rows still allocate space up to `NextOrdinal` width, but dead ordinal positions are left as nil.
+
+### WAL Format
+
+ALTER TABLE operations are recorded in the catalog WAL as dedicated op codes:
+
+- `opAddColumn (6)`: `[table:str][name:str][datatype:u8][pk:u8][ordinal:u16]`
+- `opDropColumn (7)`: `[table:str][colName:str]`
+
+The CREATE TABLE entry (WAL v3) includes a uint16 ordinal per column. Migration from v2→v3 assigns sequential ordinals (0, 1, 2, ...) to existing columns.
+
+### Constraints
+
+- Cannot drop the primary key column
+- Cannot drop the last remaining column
+- Cannot add a column with the same name as an existing column
+- Added columns cannot be primary keys (would require backfilling existing rows)
 
 ## What We Don't Have (and Why)
 

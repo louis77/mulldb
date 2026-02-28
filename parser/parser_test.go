@@ -1793,3 +1793,73 @@ func TestParse_NotWithLikeDoesNotConflict(t *testing.T) {
 		t.Error("LikeExpr.Not = true, want false (NOT is outer)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ALTER TABLE tests
+// ---------------------------------------------------------------------------
+
+func TestParse_AlterTableAddColumn(t *testing.T) {
+	stmt, err := Parse("ALTER TABLE t ADD COLUMN c INTEGER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alt, ok := stmt.(*AlterTableAddColumnStmt)
+	if !ok {
+		t.Fatalf("got %T, want *AlterTableAddColumnStmt", stmt)
+	}
+	if alt.Table.Name != "t" {
+		t.Errorf("table = %q, want %q", alt.Table.Name, "t")
+	}
+	if alt.Column.Name != "c" {
+		t.Errorf("column = %q, want %q", alt.Column.Name, "c")
+	}
+	if alt.Column.DataType != "INTEGER" {
+		t.Errorf("type = %q, want INTEGER", alt.Column.DataType)
+	}
+}
+
+func TestParse_AlterTableAddColumnNoKeyword(t *testing.T) {
+	stmt, err := Parse("ALTER TABLE t ADD c TEXT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alt := stmt.(*AlterTableAddColumnStmt)
+	if alt.Column.Name != "c" || alt.Column.DataType != "TEXT" {
+		t.Errorf("got %q %q, want c TEXT", alt.Column.Name, alt.Column.DataType)
+	}
+}
+
+func TestParse_AlterTableDropColumn(t *testing.T) {
+	stmt, err := Parse("ALTER TABLE t DROP COLUMN c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alt, ok := stmt.(*AlterTableDropColumnStmt)
+	if !ok {
+		t.Fatalf("got %T, want *AlterTableDropColumnStmt", stmt)
+	}
+	if alt.Table.Name != "t" {
+		t.Errorf("table = %q, want %q", alt.Table.Name, "t")
+	}
+	if alt.Column != "c" {
+		t.Errorf("column = %q, want %q", alt.Column, "c")
+	}
+}
+
+func TestParse_AlterTableDropColumnNoKeyword(t *testing.T) {
+	stmt, err := Parse("ALTER TABLE t DROP c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alt := stmt.(*AlterTableDropColumnStmt)
+	if alt.Column != "c" {
+		t.Errorf("got %q, want c", alt.Column)
+	}
+}
+
+func TestParse_AlterTableAddPrimaryKeyError(t *testing.T) {
+	_, err := Parse("ALTER TABLE t ADD c INTEGER PRIMARY KEY")
+	if err == nil {
+		t.Fatal("expected error for ADD ... PRIMARY KEY")
+	}
+}

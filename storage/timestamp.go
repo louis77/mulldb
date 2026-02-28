@@ -32,24 +32,26 @@ func ParseTimestamp(s string) (time.Time, error) {
 
 // coerceRowValues validates and coerces values to match the column types
 // in def. Currently only TIMESTAMP columns need coercion (string → time.Time).
+// Uses col.Ordinal to index into the values slice (ordinal-based storage).
 func coerceRowValues(def *TableDef, values []any) ([]any, error) {
-	for i, col := range def.Columns {
-		if i >= len(values) || values[i] == nil {
+	for _, col := range def.Columns {
+		ord := col.Ordinal
+		if ord >= len(values) || values[ord] == nil {
 			continue
 		}
 		if col.DataType == TypeTimestamp {
-			if _, ok := values[i].(time.Time); ok {
+			if _, ok := values[ord].(time.Time); ok {
 				continue // already a time.Time
 			}
-			s, ok := values[i].(string)
+			s, ok := values[ord].(string)
 			if !ok {
-				return nil, fmt.Errorf("column %q expects TIMESTAMP, got %T", col.Name, values[i])
+				return nil, fmt.Errorf("column %q expects TIMESTAMP, got %T", col.Name, values[ord])
 			}
 			t, err := ParseTimestamp(s)
 			if err != nil {
 				return nil, fmt.Errorf("column %q: %w", col.Name, err)
 			}
-			values[i] = t
+			values[ord] = t
 		}
 	}
 	return values, nil

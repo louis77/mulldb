@@ -219,7 +219,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | F031-01 | CREATE TABLE statement | **Done** |
 | F031-02 | CREATE VIEW statement | Open |
 | F031-03 | GRANT statement | Open |
-| F031-04 | ALTER TABLE: ADD COLUMN clause | Open |
+| F031-04 | ALTER TABLE: ADD COLUMN clause | **Done** (ADD COLUMN and DROP COLUMN via ordinal-based storage) |
 | F031-13 | DROP TABLE: RESTRICT clause | **Partial** (DROP TABLE works; no RESTRICT/CASCADE semantics) |
 | F031-16 | DROP VIEW: RESTRICT clause | Open |
 | F031-19 | REVOKE statement: RESTRICT clause | Open |

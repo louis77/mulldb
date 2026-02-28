@@ -479,6 +479,14 @@ func (h *testReplayHandler) OnDropTable(name string) error {
 	return nil
 }
 
+func (h *testReplayHandler) OnAddColumn(table string, col ColumnDef) error {
+	return nil
+}
+
+func (h *testReplayHandler) OnDropColumn(table string, colName string) error {
+	return nil
+}
+
 func (h *testReplayHandler) OnInsert(table string, rowID int64, values []any) error {
 	h.inserts = append(h.inserts, insertRecord{table: table, rowID: rowID, vals: values})
 	return nil

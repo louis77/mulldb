@@ -30,10 +30,11 @@ func init() {
 func registerPGType() {
 	catalogTables["pg_catalog.pg_type"] = &catalogTable{
 		def: &storage.TableDef{
-			Name: "pg_type",
+			Name:        "pg_type",
+			NextOrdinal: 2,
 			Columns: []storage.ColumnDef{
-				{Name: "oid", DataType: storage.TypeInteger},
-				{Name: "typname", DataType: storage.TypeText},
+				{Name: "oid", DataType: storage.TypeInteger, Ordinal: 0},
+				{Name: "typname", DataType: storage.TypeText, Ordinal: 1},
 			},
 		},
 		rows: func(_ storage.Engine) []storage.Row {
@@ -53,9 +54,10 @@ func registerPGType() {
 func registerPGDatabase() {
 	catalogTables["pg_catalog.pg_database"] = &catalogTable{
 		def: &storage.TableDef{
-			Name: "pg_database",
+			Name:        "pg_database",
+			NextOrdinal: 1,
 			Columns: []storage.ColumnDef{
-				{Name: "datname", DataType: storage.TypeText},
+				{Name: "datname", DataType: storage.TypeText, Ordinal: 0},
 			},
 		},
 		rows: func(_ storage.Engine) []storage.Row {
@@ -70,10 +72,11 @@ func registerPGDatabase() {
 func registerPGNamespace() {
 	catalogTables["pg_catalog.pg_namespace"] = &catalogTable{
 		def: &storage.TableDef{
-			Name: "pg_namespace",
+			Name:        "pg_namespace",
+			NextOrdinal: 2,
 			Columns: []storage.ColumnDef{
-				{Name: "oid", DataType: storage.TypeInteger},
-				{Name: "nspname", DataType: storage.TypeText},
+				{Name: "oid", DataType: storage.TypeInteger, Ordinal: 0},
+				{Name: "nspname", DataType: storage.TypeText, Ordinal: 1},
 			},
 		},
 		rows: func(_ storage.Engine) []storage.Row {
@@ -90,11 +93,12 @@ func registerPGNamespace() {
 func registerInformationSchemaTables() {
 	catalogTables["information_schema.tables"] = &catalogTable{
 		def: &storage.TableDef{
-			Name: "tables",
+			Name:        "tables",
+			NextOrdinal: 3,
 			Columns: []storage.ColumnDef{
-				{Name: "table_schema", DataType: storage.TypeText},
-				{Name: "table_name", DataType: storage.TypeText},
-				{Name: "table_type", DataType: storage.TypeText},
+				{Name: "table_schema", DataType: storage.TypeText, Ordinal: 0},
+				{Name: "table_name", DataType: storage.TypeText, Ordinal: 1},
+				{Name: "table_type", DataType: storage.TypeText, Ordinal: 2},
 			},
 		},
 		rows: func(eng storage.Engine) []storage.Row {
@@ -140,14 +144,15 @@ func registerInformationSchemaTables() {
 func registerInformationSchemaColumns() {
 	catalogTables["information_schema.columns"] = &catalogTable{
 		def: &storage.TableDef{
-			Name: "columns",
+			Name:        "columns",
+			NextOrdinal: 6,
 			Columns: []storage.ColumnDef{
-				{Name: "table_schema", DataType: storage.TypeText},
-				{Name: "table_name", DataType: storage.TypeText},
-				{Name: "column_name", DataType: storage.TypeText},
-				{Name: "ordinal_position", DataType: storage.TypeInteger},
-				{Name: "data_type", DataType: storage.TypeText},
-				{Name: "is_nullable", DataType: storage.TypeText},
+				{Name: "table_schema", DataType: storage.TypeText, Ordinal: 0},
+				{Name: "table_name", DataType: storage.TypeText, Ordinal: 1},
+				{Name: "column_name", DataType: storage.TypeText, Ordinal: 2},
+				{Name: "ordinal_position", DataType: storage.TypeInteger, Ordinal: 3},
+				{Name: "data_type", DataType: storage.TypeText, Ordinal: 4},
+				{Name: "is_nullable", DataType: storage.TypeText, Ordinal: 5},
 			},
 		},
 		rows: func(eng storage.Engine) []storage.Row {

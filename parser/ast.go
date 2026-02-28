@@ -121,15 +121,29 @@ type CommitStmt struct{}
 // RollbackStmt: ROLLBACK (no-op transaction rollback)
 type RollbackStmt struct{}
 
-func (*CreateTableStmt) statementNode() {}
-func (*DropTableStmt) statementNode()   {}
-func (*InsertStmt) statementNode()      {}
-func (*SelectStmt) statementNode()      {}
-func (*UpdateStmt) statementNode()      {}
-func (*DeleteStmt) statementNode()      {}
-func (*BeginStmt) statementNode()       {}
-func (*CommitStmt) statementNode()      {}
-func (*RollbackStmt) statementNode()    {}
+// AlterTableAddColumnStmt: ALTER TABLE <name> ADD [COLUMN] <coldef>
+type AlterTableAddColumnStmt struct {
+	Table  TableRef
+	Column ColumnDef
+}
+
+// AlterTableDropColumnStmt: ALTER TABLE <name> DROP [COLUMN] <name>
+type AlterTableDropColumnStmt struct {
+	Table  TableRef
+	Column string
+}
+
+func (*CreateTableStmt) statementNode()          {}
+func (*DropTableStmt) statementNode()             {}
+func (*InsertStmt) statementNode()                {}
+func (*SelectStmt) statementNode()                {}
+func (*UpdateStmt) statementNode()                {}
+func (*DeleteStmt) statementNode()                {}
+func (*BeginStmt) statementNode()                 {}
+func (*CommitStmt) statementNode()                {}
+func (*RollbackStmt) statementNode()              {}
+func (*AlterTableAddColumnStmt) statementNode()   {}
+func (*AlterTableDropColumnStmt) statementNode()  {}
 
 // ---------------------------------------------------------------------------
 // Expressions

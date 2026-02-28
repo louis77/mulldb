@@ -79,6 +79,11 @@ func sqlstateForError(err error) string {
 		return "23505" // unique_violation
 	}
 
+	var colExists *storage.ColumnExistsError
+	if errors.As(err, &colExists) {
+		return "42701" // duplicate_column
+	}
+
 	// Fallback: syntax error or general error.
 	return "42000"
 }

@@ -13,7 +13,7 @@ import (
 const (
 	walMagic          = "MWAL"
 	walHeaderSize     = 6 // 4 (magic) + 2 (version)
-	walCurrentVersion = 2 // v1 = legacy (no PK flag), v2 = current
+	walCurrentVersion = 3 // v1 = legacy (no PK flag), v2 = PK flag, v3 = ordinals + ALTER TABLE
 )
 
 // WAL operation types.
@@ -23,6 +23,8 @@ const (
 	opInsert      byte = 3
 	opDelete      byte = 4
 	opUpdate      byte = 5
+	opAddColumn   byte = 6
+	opDropColumn  byte = 7
 )
 
 // WALMigrationNeededError is returned when a WAL file requires migration
@@ -176,6 +178,7 @@ func (w *WAL) writeEntry(op byte, payload []byte) error {
 }
 
 // WriteCreateTable logs a CREATE TABLE operation.
+// v3 format: [table:str][colCount:u16] per col: [name:str][datatype:u8][pk:u8][ordinal:u16]
 func (w *WAL) WriteCreateTable(name string, columns []ColumnDef) error {
 	buf := encodeString(nil, name)
 	buf = binary.BigEndian.AppendUint16(buf, uint16(len(columns)))
@@ -187,6 +190,7 @@ func (w *WAL) WriteCreateTable(name string, columns []ColumnDef) error {
 			pkFlag = 1
 		}
 		buf = append(buf, pkFlag)
+		buf = binary.BigEndian.AppendUint16(buf, uint16(col.Ordinal))
 	}
 	return w.writeEntry(opCreateTable, buf)
 }
@@ -194,6 +198,29 @@ func (w *WAL) WriteCreateTable(name string, columns []ColumnDef) error {
 // WriteDropTable logs a DROP TABLE operation.
 func (w *WAL) WriteDropTable(name string) error {
 	return w.writeEntry(opDropTable, encodeString(nil, name))
+}
+
+// WriteAddColumn logs an ALTER TABLE ADD COLUMN operation.
+// Format: [table:str][name:str][datatype:u8][pk:u8][ordinal:u16]
+func (w *WAL) WriteAddColumn(table string, col ColumnDef) error {
+	buf := encodeString(nil, table)
+	buf = encodeString(buf, col.Name)
+	buf = append(buf, byte(col.DataType))
+	var pkFlag byte
+	if col.PrimaryKey {
+		pkFlag = 1
+	}
+	buf = append(buf, pkFlag)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(col.Ordinal))
+	return w.writeEntry(opAddColumn, buf)
+}
+
+// WriteDropColumn logs an ALTER TABLE DROP COLUMN operation.
+// Format: [table:str][colName:str]
+func (w *WAL) WriteDropColumn(table string, colName string) error {
+	buf := encodeString(nil, table)
+	buf = encodeString(buf, colName)
+	return w.writeEntry(opDropColumn, buf)
 }
 
 // WriteInsert logs an INSERT operation for a single row.
@@ -233,6 +260,8 @@ func (w *WAL) WriteUpdate(table string, updates []rowUpdate) error {
 type ReplayHandler interface {
 	OnCreateTable(name string, columns []ColumnDef) error
 	OnDropTable(name string) error
+	OnAddColumn(table string, col ColumnDef) error
+	OnDropColumn(table string, colName string) error
 	OnInsert(table string, rowID int64, values []any) error
 	OnDelete(table string, rowIDs []int64) error
 	OnUpdate(table string, updates []rowUpdate) error
@@ -281,6 +310,10 @@ func replayEntry(op byte, payload []byte, h ReplayHandler) error {
 		return replayCreateTable(payload, h)
 	case opDropTable:
 		return replayDropTable(payload, h)
+	case opAddColumn:
+		return replayAddColumn(payload, h)
+	case opDropColumn:
+		return replayDropColumn(payload, h)
 	case opInsert:
 		return replayInsert(payload, h)
 	case opDelete:
@@ -309,12 +342,13 @@ func replayCreateTable(payload []byte, h ReplayHandler) error {
 		if err != nil {
 			return err
 		}
-		if len(rest) < 2 {
-			return fmt.Errorf("truncated column type/pk")
+		if len(rest) < 4 { // datatype(1) + pk(1) + ordinal(2)
+			return fmt.Errorf("truncated column type/pk/ordinal")
 		}
 		cols[i].DataType = DataType(rest[0])
 		cols[i].PrimaryKey = rest[1] != 0
-		rest = rest[2:]
+		cols[i].Ordinal = int(binary.BigEndian.Uint16(rest[2:4]))
+		rest = rest[4:]
 	}
 	return h.OnCreateTable(name, cols)
 }
@@ -325,6 +359,37 @@ func replayDropTable(payload []byte, h ReplayHandler) error {
 		return err
 	}
 	return h.OnDropTable(name)
+}
+
+func replayAddColumn(payload []byte, h ReplayHandler) error {
+	table, rest, err := decodeString(payload)
+	if err != nil {
+		return err
+	}
+	var col ColumnDef
+	col.Name, rest, err = decodeString(rest)
+	if err != nil {
+		return err
+	}
+	if len(rest) < 4 { // datatype(1) + pk(1) + ordinal(2)
+		return fmt.Errorf("truncated add column data")
+	}
+	col.DataType = DataType(rest[0])
+	col.PrimaryKey = rest[1] != 0
+	col.Ordinal = int(binary.BigEndian.Uint16(rest[2:4]))
+	return h.OnAddColumn(table, col)
+}
+
+func replayDropColumn(payload []byte, h ReplayHandler) error {
+	table, rest, err := decodeString(payload)
+	if err != nil {
+		return err
+	}
+	colName, _, err := decodeString(rest)
+	if err != nil {
+		return err
+	}
+	return h.OnDropColumn(table, colName)
 }
 
 func replayInsert(payload []byte, h ReplayHandler) error {

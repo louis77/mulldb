@@ -2128,3 +2128,197 @@ func TestExecutor_LikeDynamicPattern(t *testing.T) {
 		t.Errorf("got %q, want Alice", r.Rows[0][0])
 	}
 }
+
+// -------------------------------------------------------------------------
+// ALTER TABLE tests
+// -------------------------------------------------------------------------
+
+func TestExecutor_AlterTableAddColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice'), (2, 'bob')")
+
+	r := exec(t, e, "ALTER TABLE t ADD COLUMN age INTEGER")
+	if r.Tag != "ALTER TABLE" {
+		t.Errorf("tag = %q, want ALTER TABLE", r.Tag)
+	}
+
+	// SELECT * should show the new column with NULL for existing rows.
+	r = exec(t, e, "SELECT * FROM t")
+	if len(r.Columns) != 3 {
+		t.Fatalf("columns = %d, want 3", len(r.Columns))
+	}
+	if r.Columns[2].Name != "age" {
+		t.Errorf("col[2] = %q, want age", r.Columns[2].Name)
+	}
+	for i, row := range r.Rows {
+		if row[2] != nil {
+			t.Errorf("row[%d].age = %v, want nil (NULL)", i, row[2])
+		}
+	}
+}
+
+func TestExecutor_AlterTableAddColumn_InsertAfter(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1)")
+	exec(t, e, "ALTER TABLE t ADD COLUMN name TEXT")
+	exec(t, e, "INSERT INTO t (id, name) VALUES (2, 'alice')")
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY id")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+	// Row 1: id=1, name=NULL
+	if r.Rows[0][1] != nil {
+		t.Errorf("row[0].name = %v, want nil", r.Rows[0][1])
+	}
+	// Row 2: id=2, name=alice
+	if string(r.Rows[1][1]) != "alice" {
+		t.Errorf("row[1].name = %q, want alice", r.Rows[1][1])
+	}
+}
+
+func TestExecutor_AlterTableDropColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT, age INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice', 30)")
+
+	r := exec(t, e, "ALTER TABLE t DROP COLUMN name")
+	if r.Tag != "ALTER TABLE" {
+		t.Errorf("tag = %q, want ALTER TABLE", r.Tag)
+	}
+
+	// SELECT * should only have id and age.
+	r = exec(t, e, "SELECT * FROM t")
+	if len(r.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(r.Columns))
+	}
+	if r.Columns[0].Name != "id" || r.Columns[1].Name != "age" {
+		t.Errorf("columns = [%s, %s], want [id, age]", r.Columns[0].Name, r.Columns[1].Name)
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("id = %q, want 1", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "30" {
+		t.Errorf("age = %q, want 30", r.Rows[0][1])
+	}
+}
+
+func TestExecutor_AlterTableDropPKError(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+
+	_, err := e.Execute("ALTER TABLE t DROP COLUMN id")
+	if err == nil {
+		t.Fatal("expected error for dropping PK column")
+	}
+}
+
+func TestExecutor_AlterTableAddDuplicateError(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+
+	_, err := e.Execute("ALTER TABLE t ADD COLUMN id TEXT")
+	if err == nil {
+		t.Fatal("expected error for duplicate column")
+	}
+	var qe *QueryError
+	if errors.As(err, &qe) && qe.Code != "42701" {
+		t.Errorf("code = %q, want 42701", qe.Code)
+	}
+}
+
+func TestExecutor_AlterTableDropLastColumnError(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+
+	_, err := e.Execute("ALTER TABLE t DROP COLUMN id")
+	if err == nil {
+		t.Fatal("expected error for dropping last column")
+	}
+}
+
+func TestExecutor_AlterTableDropNonExistentError(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+
+	_, err := e.Execute("ALTER TABLE t DROP COLUMN nope")
+	if err == nil {
+		t.Fatal("expected error for non-existent column")
+	}
+}
+
+func TestExecutor_AlterTableWhereOnNewColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1), (2)")
+	exec(t, e, "ALTER TABLE t ADD COLUMN name TEXT")
+	exec(t, e, "INSERT INTO t (id, name) VALUES (3, 'carol')")
+
+	// WHERE on new column — old rows have NULL.
+	r := exec(t, e, "SELECT id FROM t WHERE name IS NOT NULL")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("id = %q, want 3", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_AlterTableWALReplay(t *testing.T) {
+	dir := tempDir(t)
+
+	// Phase 1: create, insert, alter, insert.
+	eng, err := storage.Open(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(eng)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1)")
+	exec(t, e, "ALTER TABLE t ADD COLUMN name TEXT")
+	exec(t, e, "INSERT INTO t (id, name) VALUES (2, 'alice')")
+	exec(t, e, "ALTER TABLE t DROP COLUMN name")
+	eng.Close()
+
+	// Phase 2: reopen and verify.
+	eng, err = storage.Open(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	e = New(eng)
+
+	r := exec(t, e, "SELECT * FROM t ORDER BY id")
+	if len(r.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(r.Columns))
+	}
+	if r.Columns[0].Name != "id" {
+		t.Errorf("col = %q, want id", r.Columns[0].Name)
+	}
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_AlterTableUpdateNewColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, name TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+	exec(t, e, "ALTER TABLE t ADD COLUMN age INTEGER")
+
+	// UPDATE the new column on old rows.
+	r := exec(t, e, "UPDATE t SET age = 30 WHERE id = 1")
+	if r.Tag != "UPDATE 1" {
+		t.Errorf("tag = %q, want UPDATE 1", r.Tag)
+	}
+
+	r = exec(t, e, "SELECT age FROM t WHERE id = 1")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "30" {
+		t.Errorf("age = %q, want 30", r.Rows[0][0])
+	}
+}
