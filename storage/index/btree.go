@@ -1,5 +1,7 @@
 package index
 
+import "mulldb/deepsize"
+
 const btreeOrder = 64 // max children per node
 
 // BTree is an in-memory B-tree that maps unique keys to row IDs.
@@ -205,6 +207,14 @@ func (b *BTree) largest(n *btreeNode) btreeEntry {
 	return n.entries[len(n.entries)-1]
 }
 
+// Size returns the estimated in-memory size of the B-tree in bytes.
+func (b *BTree) Size() int64 {
+	if b.root == nil {
+		return 0
+	}
+	return deepsize.Of(b.root)
+}
+
 // -------------------------------------------------------------------------
 // MultiBTree — non-unique index (key → multiple row IDs)
 // -------------------------------------------------------------------------
@@ -264,6 +274,11 @@ func (m *MultiBTree) GetAll(key any) []int64 {
 // Delete removes a specific (key, rowID) pair. Returns false if not found.
 func (m *MultiBTree) Delete(key any, rowID int64) bool {
 	return m.bt.Delete(multiKey{key: key, rowID: rowID})
+}
+
+// Size returns the estimated in-memory size of the multi-value B-tree in bytes.
+func (m *MultiBTree) Size() int64 {
+	return m.bt.Size()
 }
 
 // collectAll performs an in-order traversal of the subtree rooted at n,

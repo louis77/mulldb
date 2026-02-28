@@ -181,6 +181,21 @@ func (e *IndexNotFoundError) Error() string {
 	return fmt.Sprintf("index %q does not exist on table %q", e.Name, e.Table)
 }
 
+// TableMemoryInfo holds memory usage information for a single table.
+type TableMemoryInfo struct {
+	TableName string
+	RowBytes  int64
+	PKIndex   *IndexMemoryInfo
+	Indexes   []IndexMemoryInfo
+}
+
+// IndexMemoryInfo holds memory usage information for a single index.
+type IndexMemoryInfo struct {
+	Name  string
+	Bytes int64
+	Type  string // "pk_index", "unique_index", "index"
+}
+
 // Engine is the storage layer interface. The executor depends on this
 // contract, never on the concrete implementation.
 type Engine interface {
@@ -199,5 +214,6 @@ type Engine interface {
 	DropIndex(table string, indexName string) error
 	LookupByIndex(table string, indexName string, value any) ([]Row, error)
 	RowCount(table string) (int64, error)
+	MemoryUsage() []TableMemoryInfo
 	Close() error
 }

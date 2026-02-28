@@ -363,6 +363,11 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 - SQLSTATE error codes
 - Wire protocol compatibility (host language binding)
 
+### mulldb extensions (non-standard)
+- `SHOW MEMORY` — per-table and per-index memory usage introspection
+- `SHOW TRACE` / `SET trace` — statement-level performance tracing
+- `INDEXED BY <name>` — explicit secondary index selection
+
 ### Biggest gaps to close
 1. **Predicates**: BETWEEN, IN
 2. **Expressions**: CASE, COALESCE (arithmetic and `::` cast are done; SQL-standard `CAST(expr AS type)` not yet)

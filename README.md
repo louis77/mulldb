@@ -676,6 +676,20 @@ SHOW TRACE;
 --  Rows Returned | 3
 ```
 
+### Memory Introspection
+
+`SHOW MEMORY` reports per-table and per-index memory usage:
+
+```sql
+SHOW MEMORY;
+--  table  |    type      |   name   | size_bytes | size_human
+-- --------+--------------+----------+------------+------------
+--  users  | table        | users    |     102400 | 100.0 KB
+--  users  | pk_index     | id       |       8192 | 8.0 KB
+--  users  | index        | idx_name |       4096 | 4.0 KB
+--         | total        |          |     114688 | 112.0 KB
+```
+
 ### WHERE Expressions
 
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`

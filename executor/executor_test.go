@@ -3264,3 +3264,98 @@ func TestExecutor_IndexedBy_TraceShowsIndexName(t *testing.T) {
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
 }
+
+// -------------------------------------------------------------------------
+// SHOW MEMORY
+// -------------------------------------------------------------------------
+
+func TestExecutor_ShowMemory(t *testing.T) {
+	e := setup(t)
+
+	// SHOW MEMORY on empty database.
+	r := exec(t, e, "SHOW MEMORY")
+	if len(r.Columns) != 5 {
+		t.Fatalf("columns = %d, want 5", len(r.Columns))
+	}
+	// Should have 1 row (just the total).
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1 (total only)", len(r.Rows))
+	}
+	// Total row: table column should be nil.
+	if r.Rows[0][0] != nil {
+		t.Errorf("total row table = %q, want nil", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "total" {
+		t.Errorf("total row type = %q, want total", r.Rows[0][1])
+	}
+
+	// Create table, insert data, add index.
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice'), (2, 'bob')")
+	exec(t, e, "CREATE INDEX idx_name ON users(name)")
+
+	r = exec(t, e, "SHOW MEMORY")
+	// Expected rows: table row + pk_index row + index row + total = 4
+	if len(r.Rows) != 4 {
+		t.Fatalf("rows = %d, want 4", len(r.Rows))
+	}
+
+	// Verify column names.
+	wantCols := []string{"table", "type", "name", "size_bytes", "size_human"}
+	for i, c := range r.Columns {
+		if c.Name != wantCols[i] {
+			t.Errorf("column[%d] = %q, want %q", i, c.Name, wantCols[i])
+		}
+	}
+
+	// Row 0: table data.
+	if string(r.Rows[0][0]) != "users" {
+		t.Errorf("row 0 table = %q, want users", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "table" {
+		t.Errorf("row 0 type = %q, want table", r.Rows[0][1])
+	}
+
+	// Row 1: pk_index.
+	if string(r.Rows[1][1]) != "pk_index" {
+		t.Errorf("row 1 type = %q, want pk_index", r.Rows[1][1])
+	}
+
+	// Row 2: secondary index.
+	if string(r.Rows[2][1]) != "index" {
+		t.Errorf("row 2 type = %q, want index", r.Rows[2][1])
+	}
+	if string(r.Rows[2][2]) != "idx_name" {
+		t.Errorf("row 2 name = %q, want idx_name", r.Rows[2][2])
+	}
+
+	// Row 3: total.
+	if string(r.Rows[3][1]) != "total" {
+		t.Errorf("row 3 type = %q, want total", r.Rows[3][1])
+	}
+	// Total size_bytes should be > 0.
+	if string(r.Rows[3][3]) == "0" {
+		t.Error("total size_bytes should be > 0")
+	}
+}
+
+func TestExecutor_ShowMemory_HumanBytes(t *testing.T) {
+	tests := []struct {
+		input int64
+		want  string
+	}{
+		{0, "0 B"},
+		{100, "100 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KB"},
+		{1536, "1.5 KB"},
+		{1048576, "1.0 MB"},
+		{1073741824, "1.0 GB"},
+	}
+	for _, tt := range tests {
+		got := humanBytes(tt.input)
+		if got != tt.want {
+			t.Errorf("humanBytes(%d) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

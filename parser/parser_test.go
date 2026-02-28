@@ -2164,3 +2164,40 @@ func TestParse_DeleteIndexedBy(t *testing.T) {
 		t.Errorf("IndexedBy = %q, want idx_email", del.IndexedBy)
 	}
 }
+
+func TestParse_ShowMemory(t *testing.T) {
+	stmt, err := Parse("SHOW MEMORY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stmt.(*ShowMemoryStmt); !ok {
+		t.Errorf("expected *ShowMemoryStmt, got %T", stmt)
+	}
+}
+
+func TestParse_ShowMemory_Semicolon(t *testing.T) {
+	stmt, err := Parse("SHOW MEMORY;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stmt.(*ShowMemoryStmt); !ok {
+		t.Errorf("expected *ShowMemoryStmt, got %T", stmt)
+	}
+}
+
+func TestParse_ShowMemory_CaseInsensitive(t *testing.T) {
+	stmt, err := Parse("show memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stmt.(*ShowMemoryStmt); !ok {
+		t.Errorf("expected *ShowMemoryStmt, got %T", stmt)
+	}
+}
+
+func TestParse_ShowUnknown(t *testing.T) {
+	_, err := Parse("SHOW TABLES")
+	if err == nil {
+		t.Error("expected error for SHOW TABLES")
+	}
+}

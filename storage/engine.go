@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
@@ -627,6 +628,23 @@ func (e *engine) ListTables() []*TableDef {
 		defs = append(defs, def)
 	}
 	return defs
+}
+
+func (e *engine) MemoryUsage() []TableMemoryInfo {
+	e.catalogMu.RLock()
+	defer e.catalogMu.RUnlock()
+
+	infos := make([]TableMemoryInfo, 0, len(e.tableStates))
+	for _, ts := range e.tableStates {
+		ts.mu.RLock()
+		info := ts.heap.memoryInfo()
+		ts.mu.RUnlock()
+		infos = append(infos, info)
+	}
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].TableName < infos[j].TableName
+	})
+	return infos
 }
 
 // -------------------------------------------------------------------------

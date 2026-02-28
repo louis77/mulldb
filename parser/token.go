@@ -89,6 +89,8 @@ const (
 	TokenIndex       // INDEX
 	TokenUnique      // UNIQUE
 	TokenIndexed     // INDEXED
+	TokenShow        // SHOW
+	TokenMemory      // MEMORY
 )
 
 var tokenNames = map[TokenType]string{
@@ -166,6 +168,8 @@ var tokenNames = map[TokenType]string{
 	TokenIndex:       "INDEX",
 	TokenUnique:      "UNIQUE",
 	TokenIndexed:     "INDEXED",
+	TokenShow:        "SHOW",
+	TokenMemory:      "MEMORY",
 }
 
 func (t TokenType) String() string {
@@ -240,6 +244,8 @@ var keywords = map[string]TokenType{
 	"INDEX":       TokenIndex,
 	"UNIQUE":      TokenUnique,
 	"INDEXED":     TokenIndexed,
+	"SHOW":        TokenShow,
+	"MEMORY":      TokenMemory,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

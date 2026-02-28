@@ -151,6 +151,9 @@ type DropIndexStmt struct {
 	Table TableRef
 }
 
+// ShowMemoryStmt: SHOW MEMORY
+type ShowMemoryStmt struct{}
+
 func (*CreateTableStmt) statementNode()          {}
 func (*DropTableStmt) statementNode()             {}
 func (*InsertStmt) statementNode()                {}
@@ -164,6 +167,7 @@ func (*AlterTableAddColumnStmt) statementNode()   {}
 func (*AlterTableDropColumnStmt) statementNode()  {}
 func (*CreateIndexStmt) statementNode()           {}
 func (*DropIndexStmt) statementNode()             {}
+func (*ShowMemoryStmt) statementNode()            {}
 
 // ---------------------------------------------------------------------------
 // Expressions

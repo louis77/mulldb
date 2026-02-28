@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"mulldb/deepsize"
 	"mulldb/storage/index"
 )
 
@@ -428,6 +429,42 @@ func (h *tableHeap) columnIndex(name string) int {
 		}
 	}
 	return -1
+}
+
+// memoryInfo returns memory usage information for this table.
+func (h *tableHeap) memoryInfo() TableMemoryInfo {
+	info := TableMemoryInfo{
+		TableName: h.def.Name,
+		RowBytes:  deepsize.Of(h.rows) + deepsize.Of(h.freeList),
+	}
+	if h.pkIdx != nil {
+		pkName := h.pkColumnName()
+		pkInfo := &IndexMemoryInfo{
+			Name:  pkName,
+			Bytes: h.pkIdx.Size(),
+			Type:  "pk_index",
+		}
+		info.PKIndex = pkInfo
+	}
+	for i := range h.secondaries {
+		si := &h.secondaries[i]
+		idxType := "index"
+		if si.unique != nil {
+			idxType = "unique_index"
+		}
+		var bytes int64
+		if si.unique != nil {
+			bytes = si.unique.Size()
+		} else {
+			bytes = si.multi.Size()
+		}
+		info.Indexes = append(info.Indexes, IndexMemoryInfo{
+			Name:  si.def.Name,
+			Bytes: bytes,
+			Type:  idxType,
+		})
+	}
+	return info
 }
 
 // sliceIterator is a RowIterator backed by an in-memory slice.

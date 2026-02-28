@@ -130,6 +130,11 @@ func (e *Executor) execute(sql string, tr *Trace) (*Result, error) {
 			tr.Table = s.Table.Name
 		}
 		return e.execDropIndex(s, tr)
+	case *parser.ShowMemoryStmt:
+		if tr != nil {
+			tr.StmtType = "SHOW MEMORY"
+		}
+		return e.execShowMemory(tr)
 	default:
 		return nil, &QueryError{Code: "42601", Message: fmt.Sprintf("unsupported statement type %T", stmt)}
 	}

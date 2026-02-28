@@ -1391,6 +1391,85 @@ func TestEngine_MigrateV3ToV4(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// MemoryUsage
+// -------------------------------------------------------------------------
+
+func TestEngine_MemoryUsage(t *testing.T) {
+	dir := tempDir(t)
+	eng := openEngine(t, dir)
+	defer eng.Close()
+
+	// Empty database — should return empty slice.
+	infos := eng.MemoryUsage()
+	if len(infos) != 0 {
+		t.Fatalf("empty db: got %d tables, want 0", len(infos))
+	}
+
+	// Create a table with PK.
+	eng.CreateTable("users", []ColumnDef{
+		{Name: "id", DataType: TypeInteger, PrimaryKey: true},
+		{Name: "name", DataType: TypeText},
+	})
+	eng.Insert("users", nil, [][]any{
+		{int64(1), "alice"},
+		{int64(2), "bob"},
+	})
+
+	// Create a second table without PK.
+	eng.CreateTable("logs", []ColumnDef{
+		{Name: "msg", DataType: TypeText},
+	})
+	eng.Insert("logs", nil, [][]any{{"hello"}})
+
+	// Create a secondary index on users.
+	eng.CreateIndex("users", IndexDef{Name: "idx_name", Column: "name", Unique: false})
+
+	infos = eng.MemoryUsage()
+	if len(infos) != 2 {
+		t.Fatalf("got %d tables, want 2", len(infos))
+	}
+
+	// Sorted by name: logs, users.
+	if infos[0].TableName != "logs" {
+		t.Errorf("infos[0].TableName = %q, want logs", infos[0].TableName)
+	}
+	if infos[1].TableName != "users" {
+		t.Errorf("infos[1].TableName = %q, want users", infos[1].TableName)
+	}
+
+	// logs: no PK, no indexes.
+	if infos[0].PKIndex != nil {
+		t.Error("logs should have no PK index")
+	}
+	if len(infos[0].Indexes) != 0 {
+		t.Errorf("logs indexes = %d, want 0", len(infos[0].Indexes))
+	}
+	if infos[0].RowBytes <= 0 {
+		t.Errorf("logs RowBytes = %d, want > 0", infos[0].RowBytes)
+	}
+
+	// users: PK + 1 secondary index.
+	if infos[1].PKIndex == nil {
+		t.Fatal("users should have a PK index")
+	}
+	if infos[1].PKIndex.Type != "pk_index" {
+		t.Errorf("users PK type = %q, want pk_index", infos[1].PKIndex.Type)
+	}
+	if infos[1].PKIndex.Bytes <= 0 {
+		t.Errorf("users PK bytes = %d, want > 0", infos[1].PKIndex.Bytes)
+	}
+	if len(infos[1].Indexes) != 1 {
+		t.Fatalf("users indexes = %d, want 1", len(infos[1].Indexes))
+	}
+	if infos[1].Indexes[0].Name != "idx_name" {
+		t.Errorf("index name = %q, want idx_name", infos[1].Indexes[0].Name)
+	}
+	if infos[1].Indexes[0].Type != "index" {
+		t.Errorf("index type = %q, want index", infos[1].Indexes[0].Type)
+	}
+}
+
 // appendUint16 is a test helper for encoding uint16 big-endian.
 func appendUint16(buf []byte, v uint16) []byte {
 	return append(buf, byte(v>>8), byte(v))

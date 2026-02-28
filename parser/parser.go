@@ -79,6 +79,8 @@ func (p *parser) parseStatement() (Statement, error) {
 		return p.parseUpdate()
 	case TokenDelete:
 		return p.parseDelete()
+	case TokenShow:
+		return p.parseShow()
 	case TokenBegin:
 		p.next()
 		return &BeginStmt{}, nil
@@ -353,6 +355,18 @@ func (p *parser) parseAlterTable() (Statement, error) {
 
 	default:
 		return nil, fmt.Errorf("expected ADD or DROP after ALTER TABLE, got %q at position %d",
+			p.cur.Literal, p.cur.Pos)
+	}
+}
+
+func (p *parser) parseShow() (Statement, error) {
+	p.next() // skip SHOW
+	switch p.cur.Type {
+	case TokenMemory:
+		p.next() // consume MEMORY
+		return &ShowMemoryStmt{}, nil
+	default:
+		return nil, fmt.Errorf("expected MEMORY after SHOW, got %q at position %d",
 			p.cur.Literal, p.cur.Pos)
 	}
 }

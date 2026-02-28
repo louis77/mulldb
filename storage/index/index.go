@@ -11,6 +11,8 @@ type Index interface {
 	Get(key any) (int64, bool)
 	// Delete removes a key. Returns false if the key was not found.
 	Delete(key any) bool
+	// Size returns the estimated in-memory size in bytes.
+	Size() int64
 }
 
 // MultiIndex maps a key to zero or more row IDs. Used for non-unique
@@ -22,4 +24,6 @@ type MultiIndex interface {
 	GetAll(key any) []int64
 	// Delete removes a specific key+rowID pair. Returns false if not found.
 	Delete(key any, rowID int64) bool
+	// Size returns the estimated in-memory size in bytes.
+	Size() int64
 }

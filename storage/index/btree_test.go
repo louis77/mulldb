@@ -223,6 +223,38 @@ func TestBTree_LargeDelete(t *testing.T) {
 	}
 }
 
+func TestBTree_Size(t *testing.T) {
+	bt := NewBTree(cmp)
+	emptySize := bt.Size()
+	if emptySize != 0 {
+		t.Errorf("empty BTree.Size() = %d, want 0", emptySize)
+	}
+
+	for i := int64(0); i < 100; i++ {
+		bt.Put(i, i*10)
+	}
+	populatedSize := bt.Size()
+	if populatedSize <= 0 {
+		t.Errorf("populated BTree.Size() = %d, want > 0", populatedSize)
+	}
+}
+
+func TestMultiBTree_Size(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	emptySize := mt.Size()
+	if emptySize != 0 {
+		t.Errorf("empty MultiBTree.Size() = %d, want 0", emptySize)
+	}
+
+	for i := int64(0); i < 50; i++ {
+		mt.Put(int64(i%10), i)
+	}
+	populatedSize := mt.Size()
+	if populatedSize <= 0 {
+		t.Errorf("populated MultiBTree.Size() = %d, want > 0", populatedSize)
+	}
+}
+
 func TestBTree_GetEmpty(t *testing.T) {
 	bt := NewBTree(cmp)
 	_, ok := bt.Get(int64(1))
