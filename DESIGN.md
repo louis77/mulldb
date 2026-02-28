@@ -139,9 +139,13 @@ Two design choices stand out in this interface:
 
 ### In-Memory Heap
 
-Each table is stored as a `tableHeap`: a `map[int64][]any` mapping internal row IDs to column value slices. Row IDs are sequential, never reused (even after deletion), and purely internal — they're not exposed to SQL.
+Each table is stored as a `tableHeap`: a dense `[][]any` array where the index is the row ID and the value is the column value slice. Row IDs are sequential auto-incrementing integers, making array indexing a natural fit. Deleted slots are set to `nil` and pushed onto a free list (a `[]int64` stack) so future inserts can reuse them without growing the array.
 
-Why a map instead of a slice? Deletions. A slice would leave holes or require shifting elements; a map gives O(1) insert, delete, and lookup by row ID. The values are stored as `[]any` (column-ordered) rather than as a struct or map because the executor knows column indices and array access is faster.
+Why a dense array instead of a map? Performance. A Go `map[int64][]any` incurs ~72 bytes of bucket overhead per entry (tophash, key, value pointer, overflow pointer, padding amortised across 8-entry buckets). Since row IDs are sequential integers starting from 1, the array index *is* the row ID — no hashing, no bucket chains, no overhead. The savings are 64 bytes per row (72-byte map entry replaced by 8-byte slice pointer), which at 2M rows eliminates ~122 MB of pure overhead. A secondary benefit: scans iterate the array in order, so rows are naturally sorted by ID without needing `sort.Slice`.
+
+The free list handles deletions. When a row is deleted, its slot is nilled out and the ID is pushed onto the free list. The next insert pops from the free list instead of allocating a fresh ID. This means the array never grows beyond `max(row IDs ever alive simultaneously)`. The trade-off: a workload that bulk-deletes without reinsertion leaves nil slots consuming 8 bytes each. This is acceptable because mulldb targets light OLTP workloads where bulk deletes without reinsertion are rare, and the 8-byte nil-slot cost is negligible compared to the 72-byte map-entry cost it replaced.
+
+The values are stored as `[]any` (column-ordered) rather than as a struct or map because the executor knows column indices and array access is faster. Typed column slices (columnar storage) remain a future option for further memory reduction by eliminating per-value interface boxing.
 
 ### Scan Snapshots
 

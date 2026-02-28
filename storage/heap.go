@@ -1,20 +1,25 @@
 package storage
 
 import (
-	"sort"
-
 	"mulldb/storage/index"
 )
 
 // tableHeap holds the in-memory row data for a single table.
 // It is populated during WAL replay and modified by engine operations.
+//
+// Rows are stored in a dense array indexed by row ID. Deleted slots are
+// set to nil and pushed onto a free list for reuse by future inserts.
+// This eliminates the ~72 bytes per row of map bucket overhead that a
+// map[int64][]any would incur, since row IDs are sequential integers.
 type tableHeap struct {
 	def         TableDef
-	rows        map[int64][]any // rowID → column values
-	nextID      int64           // next ID to assign on insert
-	pkIdx       index.Index     // nil if no primary key
-	pkCol       int             // column index of PK, or -1
-	secondaries []secondaryIdx  // secondary indexes
+	rows        [][]any   // indexed by rowID; nil = free slot
+	freeList    []int64   // stack of reusable row IDs from deletes
+	count       int       // number of live (non-nil) rows
+	nextID      int64     // next fresh ID (used when freeList empty)
+	pkIdx       index.Index
+	pkCol       int
+	secondaries []secondaryIdx
 }
 
 // secondaryIdx tracks a single secondary index on the table.
@@ -28,7 +33,7 @@ type secondaryIdx struct {
 func newTableHeap(def TableDef) *tableHeap {
 	h := &tableHeap{
 		def:    def,
-		rows:   make(map[int64][]any),
+		rows:   [][]any{},
 		nextID: 1,
 		pkCol:  def.PrimaryKeyColumn(),
 	}
@@ -40,6 +45,11 @@ func newTableHeap(def TableDef) *tableHeap {
 
 // allocateID reserves and returns the next row ID.
 func (h *tableHeap) allocateID() int64 {
+	if n := len(h.freeList); n > 0 {
+		id := h.freeList[n-1]
+		h.freeList = h.freeList[:n-1]
+		return id
+	}
 	id := h.nextID
 	h.nextID++
 	return id
@@ -53,6 +63,26 @@ func (h *tableHeap) pkColumnName() string {
 		}
 	}
 	return ""
+}
+
+// growRows extends the rows slice so that index id is valid.
+func (h *tableHeap) growRows(id int64) {
+	need := int(id) + 1
+	if need <= len(h.rows) {
+		return
+	}
+	if need <= cap(h.rows) {
+		h.rows = h.rows[:need]
+		return
+	}
+	// Grow with amortized doubling.
+	newCap := cap(h.rows) * 2
+	if newCap < need {
+		newCap = need
+	}
+	grown := make([][]any, need, newCap)
+	copy(grown, h.rows)
+	h.rows = grown
 }
 
 // insertWithID stores a row with a specific ID (used by both live inserts
@@ -112,7 +142,9 @@ func (h *tableHeap) insertWithID(id int64, values []any) error {
 	}
 	row := make([]any, len(values))
 	copy(row, values)
+	h.growRows(id)
 	h.rows[id] = row
+	h.count++
 	if id >= h.nextID {
 		h.nextID = id + 1
 	}
@@ -122,10 +154,10 @@ func (h *tableHeap) insertWithID(id int64, values []any) error {
 // deleteRows removes the rows with the given IDs.
 func (h *tableHeap) deleteRows(ids []int64) {
 	for _, id := range ids {
-		vals, ok := h.rows[id]
-		if !ok {
+		if int(id) >= len(h.rows) || h.rows[id] == nil {
 			continue
 		}
+		vals := h.rows[id]
 		if h.pkIdx != nil {
 			h.pkIdx.Delete(RowValue(vals, h.pkCol))
 		}
@@ -141,7 +173,9 @@ func (h *tableHeap) deleteRows(ids []int64) {
 				si.multi.Delete(key, id)
 			}
 		}
-		delete(h.rows, id)
+		h.rows[id] = nil
+		h.freeList = append(h.freeList, id)
+		h.count--
 	}
 }
 
@@ -259,11 +293,10 @@ func (h *tableHeap) lookupByPK(value any) (*Row, bool) {
 	if !ok {
 		return nil, false
 	}
-	vals, ok := h.rows[rowID]
-	if !ok {
+	if int(rowID) >= len(h.rows) || h.rows[rowID] == nil {
 		return nil, false
 	}
-	return &Row{ID: rowID, Values: vals}, true
+	return &Row{ID: rowID, Values: h.rows[rowID]}, true
 }
 
 // buildSecondaryIndexes populates all secondary indexes from the current rows.
@@ -273,12 +306,15 @@ func (h *tableHeap) buildSecondaryIndexes() error {
 	for i := range h.secondaries {
 		si := &h.secondaries[i]
 		for id, vals := range h.rows {
+			if vals == nil {
+				continue
+			}
 			key := RowValue(vals, si.colOrd)
 			if key == nil {
 				continue
 			}
 			if si.unique != nil {
-				if !si.unique.Put(key, id) {
+				if !si.unique.Put(key, int64(id)) {
 					return &UniqueViolationError{
 						Table:  h.def.Name,
 						Column: si.def.Column,
@@ -287,7 +323,7 @@ func (h *tableHeap) buildSecondaryIndexes() error {
 					}
 				}
 			} else {
-				si.multi.Put(key, id)
+				si.multi.Put(key, int64(id))
 			}
 		}
 	}
@@ -309,12 +345,15 @@ func (h *tableHeap) addSecondaryIndex(def IndexDef) error {
 	}
 	// Populate from existing rows.
 	for id, vals := range h.rows {
+		if vals == nil {
+			continue
+		}
 		key := RowValue(vals, colOrd)
 		if key == nil {
 			continue
 		}
 		if si.unique != nil {
-			if !si.unique.Put(key, id) {
+			if !si.unique.Put(key, int64(id)) {
 				return &UniqueViolationError{
 					Table:  h.def.Name,
 					Column: def.Column,
@@ -323,7 +362,7 @@ func (h *tableHeap) addSecondaryIndex(def IndexDef) error {
 				}
 			}
 		} else {
-			si.multi.Put(key, id)
+			si.multi.Put(key, int64(id))
 		}
 	}
 	h.secondaries = append(h.secondaries, si)
@@ -358,8 +397,8 @@ func (h *tableHeap) lookupByIndex(name string, value any) []Row {
 		}
 		rows := make([]Row, 0, len(ids))
 		for _, id := range ids {
-			if vals, ok := h.rows[id]; ok {
-				rows = append(rows, Row{ID: id, Values: vals})
+			if int(id) < len(h.rows) && h.rows[id] != nil {
+				rows = append(rows, Row{ID: id, Values: h.rows[id]})
 			}
 		}
 		return rows
@@ -368,15 +407,16 @@ func (h *tableHeap) lookupByIndex(name string, value any) []Row {
 }
 
 // scan returns a RowIterator over all rows in the table.
-// Rows are returned in insertion order (ascending row ID).
+// Rows are returned in insertion order (ascending row ID) naturally,
+// since the array index is the row ID.
 func (h *tableHeap) scan() RowIterator {
-	rows := make([]Row, 0, len(h.rows))
+	rows := make([]Row, 0, h.count)
 	for id, values := range h.rows {
-		rows = append(rows, Row{ID: id, Values: values})
+		if values == nil {
+			continue
+		}
+		rows = append(rows, Row{ID: int64(id), Values: values})
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].ID < rows[j].ID
-	})
 	return &sliceIterator{rows: rows}
 }
 

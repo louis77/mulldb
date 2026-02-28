@@ -615,7 +615,7 @@ func (e *engine) RowCount(table string) (int64, error) {
 	}
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return int64(len(ts.heap.rows)), nil
+	return int64(ts.heap.count), nil
 }
 
 func (e *engine) ListTables() []*TableDef {
@@ -762,7 +762,10 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 
 	var updates []rowUpdate
 	for id, values := range heap.rows {
-		row := Row{ID: id, Values: values}
+		if values == nil {
+			continue
+		}
+		row := Row{ID: int64(id), Values: values}
 		if filter != nil && !filter(row) {
 			continue
 		}
@@ -780,7 +783,7 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 		if err != nil {
 			return 0, err
 		}
-		updates = append(updates, rowUpdate{RowID: id, Values: coerced})
+		updates = append(updates, rowUpdate{RowID: int64(id), Values: coerced})
 	}
 
 	if len(updates) == 0 {
@@ -880,11 +883,14 @@ func (e *engine) Delete(table string, filter func(Row) bool) (int64, error) {
 
 	var ids []int64
 	for id, values := range heap.rows {
-		row := Row{ID: id, Values: values}
+		if values == nil {
+			continue
+		}
+		row := Row{ID: int64(id), Values: values}
 		if filter != nil && !filter(row) {
 			continue
 		}
-		ids = append(ids, id)
+		ids = append(ids, int64(id))
 	}
 
 	if len(ids) == 0 {
