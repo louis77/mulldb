@@ -85,6 +85,16 @@ func sqlstateForError(err error) string {
 		return "42701" // duplicate_column
 	}
 
+	var indexExists *storage.IndexExistsError
+	if errors.As(err, &indexExists) {
+		return "42P07" // duplicate_object
+	}
+
+	var indexNotFound *storage.IndexNotFoundError
+	if errors.As(err, &indexNotFound) {
+		return "42704" // undefined_object
+	}
+
 	// Fallback: syntax error or general error.
 	return "42000"
 }

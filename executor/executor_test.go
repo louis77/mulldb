@@ -2,6 +2,7 @@ package executor
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -2758,4 +2759,196 @@ func TestExecutor_AlterTableUpdateNewColumn(t *testing.T) {
 	if string(r.Rows[0][0]) != "30" {
 		t.Errorf("age = %q, want 30", r.Rows[0][0])
 	}
+}
+
+// -------------------------------------------------------------------------
+// Secondary index tests
+// -------------------------------------------------------------------------
+
+func TestExecutor_CreateIndex(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, name TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice@test.com', 'Alice')")
+	exec(t, e, "INSERT INTO users VALUES (2, 'bob@test.com', 'Bob')")
+
+	r := exec(t, e, "CREATE INDEX idx_email ON users(email)")
+	if r.Tag != "CREATE INDEX" {
+		t.Errorf("tag = %q, want CREATE INDEX", r.Tag)
+	}
+
+	// Query using the indexed column should return correct results.
+	r = exec(t, e, "SELECT name FROM users WHERE email = 'alice@test.com'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Alice" {
+		t.Errorf("name = %q, want Alice", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_CreateIndexAutoName(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, val TEXT)")
+
+	// No name given — auto-generated as idx_val.
+	r := exec(t, e, "CREATE INDEX ON t(val)")
+	if r.Tag != "CREATE INDEX" {
+		t.Errorf("tag = %q, want CREATE INDEX", r.Tag)
+	}
+
+	// Creating another auto-named index on the same column should fail (duplicate).
+	_, err := e.Execute("CREATE INDEX ON t(val)")
+	if err == nil {
+		t.Fatal("expected error for duplicate index, got nil")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) || qe.Code != "42P07" {
+		t.Errorf("expected SQLSTATE 42P07, got %v", err)
+	}
+}
+
+func TestExecutor_CreateUniqueIndex(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+	exec(t, e, "INSERT INTO users VALUES (1, 'alice@test.com')")
+	exec(t, e, "INSERT INTO users VALUES (2, 'bob@test.com')")
+
+	exec(t, e, "CREATE UNIQUE INDEX idx_email ON users(email)")
+
+	// Inserting a duplicate email should now fail.
+	_, err := e.Execute("INSERT INTO users VALUES (3, 'alice@test.com')")
+	if err == nil {
+		t.Fatal("expected unique violation, got nil")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) || qe.Code != "23505" {
+		t.Errorf("expected SQLSTATE 23505, got %v", err)
+	}
+}
+
+func TestExecutor_DropIndex(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, val TEXT)")
+	exec(t, e, "CREATE INDEX idx_val ON t(val)")
+
+	r := exec(t, e, "DROP INDEX idx_val ON t")
+	if r.Tag != "DROP INDEX" {
+		t.Errorf("tag = %q, want DROP INDEX", r.Tag)
+	}
+
+	// Dropping again should fail.
+	_, err := e.Execute("DROP INDEX idx_val ON t")
+	if err == nil {
+		t.Fatal("expected error for nonexistent index, got nil")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) || qe.Code != "42704" {
+		t.Errorf("expected SQLSTATE 42704, got %v", err)
+	}
+}
+
+func TestExecutor_IndexQueryAcceleration(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE products (id INTEGER PRIMARY KEY, sku TEXT, name TEXT)")
+	for i := 1; i <= 100; i++ {
+		exec(t, e, "INSERT INTO products VALUES ("+itoa(i)+", 'SKU-"+itoa(i)+"', 'Product "+itoa(i)+"')")
+	}
+
+	exec(t, e, "CREATE INDEX idx_sku ON products(sku)")
+
+	// Query by indexed column.
+	r := exec(t, e, "SELECT name FROM products WHERE sku = 'SKU-42'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Product 42" {
+		t.Errorf("name = %q, want Product 42", r.Rows[0][0])
+	}
+
+	// Verify tracing reports index usage.
+	result, tr, err := e.ExecuteTraced("SELECT name FROM products WHERE sku = 'SKU-42'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tr.UsedIndex {
+		t.Error("expected UsedIndex=true for indexed column lookup")
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("traced query got %d rows, want 1", len(result.Rows))
+	}
+}
+
+func TestExecutor_IndexWithNullValues(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a')")
+	exec(t, e, "INSERT INTO t VALUES (2, NULL)")
+	exec(t, e, "INSERT INTO t VALUES (3, NULL)")
+
+	// UNIQUE index should allow multiple NULLs (SQL standard).
+	exec(t, e, "CREATE UNIQUE INDEX idx_val ON t(val)")
+
+	// Query for a specific value should work.
+	r := exec(t, e, "SELECT id FROM t WHERE val = 'a'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("id = %q, want 1", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_IndexSurvivesRestart(t *testing.T) {
+	dir := tempDir(t)
+
+	// First session: create table, insert data, create index.
+	eng1, err := storage.Open(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e1 := New(eng1)
+	exec(t, e1, "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+	exec(t, e1, "INSERT INTO t VALUES (1, 'hello')")
+	exec(t, e1, "INSERT INTO t VALUES (2, 'world')")
+	exec(t, e1, "CREATE INDEX idx_val ON t(val)")
+	eng1.Close()
+
+	// Second session: reopen, verify index works.
+	eng2, err := storage.Open(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng2.Close()
+	e2 := New(eng2)
+
+	r := exec(t, e2, "SELECT id FROM t WHERE val = 'hello'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows after restart, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("id = %q, want 1", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_NonUniqueIndex(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT, amount INTEGER)")
+	exec(t, e, "INSERT INTO orders VALUES (1, 'pending', 100)")
+	exec(t, e, "INSERT INTO orders VALUES (2, 'shipped', 200)")
+	exec(t, e, "INSERT INTO orders VALUES (3, 'pending', 150)")
+
+	exec(t, e, "CREATE INDEX idx_status ON orders(status)")
+
+	// Non-unique index should return multiple rows.
+	r := exec(t, e, "SELECT id FROM orders WHERE status = 'pending' ORDER BY id")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" || string(r.Rows[1][0]) != "3" {
+		t.Errorf("ids = [%s, %s], want [1, 3]", r.Rows[0][0], r.Rows[1][0])
+	}
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }

@@ -204,3 +204,96 @@ func (b *BTree) largest(n *btreeNode) btreeEntry {
 	}
 	return n.entries[len(n.entries)-1]
 }
+
+// -------------------------------------------------------------------------
+// MultiBTree — non-unique index (key → multiple row IDs)
+// -------------------------------------------------------------------------
+
+// multiKey wraps a user key and rowID into a composite key so that every
+// entry in the underlying B-tree is unique even when user keys repeat.
+type multiKey struct {
+	key   any
+	rowID int64
+}
+
+// MultiBTree is an in-memory B-tree that maps non-unique keys to row IDs.
+// It implements the MultiIndex interface. Internally it stores composite
+// (key, rowID) entries in a standard BTree, using a comparator that orders
+// first by key, then by rowID.
+type MultiBTree struct {
+	bt  *BTree
+	cmp func(a, b any) int // user-supplied key comparator
+}
+
+// NewMultiBTree creates a new multi-value B-tree using the given key comparator.
+func NewMultiBTree(cmp func(a, b any) int) *MultiBTree {
+	compositeCmp := func(a, b any) int {
+		ak, bk := a.(multiKey), b.(multiKey)
+		c := cmp(ak.key, bk.key)
+		if c != 0 {
+			return c
+		}
+		switch {
+		case ak.rowID < bk.rowID:
+			return -1
+		case ak.rowID > bk.rowID:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return &MultiBTree{bt: NewBTree(compositeCmp), cmp: cmp}
+}
+
+// Put inserts a key→rowID mapping. Always succeeds because the composite
+// (key, rowID) is unique even when the user key repeats.
+func (m *MultiBTree) Put(key any, rowID int64) {
+	m.bt.Put(multiKey{key: key, rowID: rowID}, rowID)
+}
+
+// GetAll returns all row IDs associated with the given key, in rowID order.
+func (m *MultiBTree) GetAll(key any) []int64 {
+	if m.bt.root == nil {
+		return nil
+	}
+	var result []int64
+	m.collectAll(m.bt.root, key, &result)
+	return result
+}
+
+// Delete removes a specific (key, rowID) pair. Returns false if not found.
+func (m *MultiBTree) Delete(key any, rowID int64) bool {
+	return m.bt.Delete(multiKey{key: key, rowID: rowID})
+}
+
+// collectAll performs an in-order traversal of the subtree rooted at n,
+// collecting row IDs for all entries whose user key matches key.
+// Because entries are sorted by (key, rowID), all matching entries are
+// contiguous and the traversal can prune branches.
+func (m *MultiBTree) collectAll(n *btreeNode, key any, result *[]int64) {
+	for i, e := range n.entries {
+		ek := e.key.(multiKey)
+		c := m.cmp(ek.key, key)
+		switch {
+		case c > 0:
+			// Entry is past the search key. Only the left child may
+			// still contain matches.
+			if !n.isLeaf() {
+				m.collectAll(n.children[i], key, result)
+			}
+			return
+		case c == 0:
+			// Left child may have earlier matches (smaller rowID).
+			if !n.isLeaf() {
+				m.collectAll(n.children[i], key, result)
+			}
+			*result = append(*result, e.rowID)
+		}
+		// c < 0: entry key < search key — left child is all < entry,
+		// so no matches there. Continue to next entry.
+	}
+	// Rightmost child may contain matches.
+	if !n.isLeaf() {
+		m.collectAll(n.children[len(n.children)-1], key, result)
+	}
+}

@@ -77,6 +77,34 @@ func (c *catalog) dropColumn(tableName string, colName string) error {
 	return nil
 }
 
+func (c *catalog) createIndex(table string, idx IndexDef) error {
+	def, exists := c.tables[table]
+	if !exists {
+		return &TableNotFoundError{Name: table}
+	}
+	for _, existing := range def.Indexes {
+		if existing.Name == idx.Name {
+			return &IndexExistsError{Name: idx.Name, Table: table}
+		}
+	}
+	def.Indexes = append(def.Indexes, idx)
+	return nil
+}
+
+func (c *catalog) dropIndex(table string, indexName string) error {
+	def, exists := c.tables[table]
+	if !exists {
+		return &TableNotFoundError{Name: table}
+	}
+	for i, idx := range def.Indexes {
+		if idx.Name == indexName {
+			def.Indexes = append(def.Indexes[:i], def.Indexes[i+1:]...)
+			return nil
+		}
+	}
+	return &IndexNotFoundError{Name: indexName, Table: table}
+}
+
 func (c *catalog) getTable(name string) (*TableDef, bool) {
 	def, ok := c.tables[name]
 	return def, ok

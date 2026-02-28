@@ -25,6 +25,8 @@ const (
 	opUpdate      byte = 5
 	opAddColumn   byte = 6
 	opDropColumn  byte = 7
+	opCreateIndex byte = 8
+	opDropIndex   byte = 9
 )
 
 // WALMigrationNeededError is returned when a WAL file requires migration
@@ -223,6 +225,28 @@ func (w *WAL) WriteDropColumn(table string, colName string) error {
 	return w.writeEntry(opDropColumn, buf)
 }
 
+// WriteCreateIndex logs a CREATE INDEX operation.
+// Format: [table:str][indexName:str][columnName:str][unique:u8]
+func (w *WAL) WriteCreateIndex(table string, idx IndexDef) error {
+	buf := encodeString(nil, table)
+	buf = encodeString(buf, idx.Name)
+	buf = encodeString(buf, idx.Column)
+	var uniqueFlag byte
+	if idx.Unique {
+		uniqueFlag = 1
+	}
+	buf = append(buf, uniqueFlag)
+	return w.writeEntry(opCreateIndex, buf)
+}
+
+// WriteDropIndex logs a DROP INDEX operation.
+// Format: [table:str][indexName:str]
+func (w *WAL) WriteDropIndex(table string, indexName string) error {
+	buf := encodeString(nil, table)
+	buf = encodeString(buf, indexName)
+	return w.writeEntry(opDropIndex, buf)
+}
+
 // WriteInsert logs an INSERT operation for a single row.
 func (w *WAL) WriteInsert(table string, rowID int64, values []any) error {
 	buf := encodeString(nil, table)
@@ -262,6 +286,8 @@ type ReplayHandler interface {
 	OnDropTable(name string) error
 	OnAddColumn(table string, col ColumnDef) error
 	OnDropColumn(table string, colName string) error
+	OnCreateIndex(table string, idx IndexDef) error
+	OnDropIndex(table string, indexName string) error
 	OnInsert(table string, rowID int64, values []any) error
 	OnDelete(table string, rowIDs []int64) error
 	OnUpdate(table string, updates []rowUpdate) error
@@ -320,6 +346,10 @@ func replayEntry(op byte, payload []byte, h ReplayHandler) error {
 		return replayDelete(payload, h)
 	case opUpdate:
 		return replayUpdate(payload, h)
+	case opCreateIndex:
+		return replayCreateIndex(payload, h)
+	case opDropIndex:
+		return replayDropIndex(payload, h)
 	default:
 		return fmt.Errorf("unknown WAL op %d", op)
 	}
@@ -453,4 +483,37 @@ func replayUpdate(payload []byte, h ReplayHandler) error {
 		}
 	}
 	return h.OnUpdate(table, updates)
+}
+
+func replayCreateIndex(payload []byte, h ReplayHandler) error {
+	table, rest, err := decodeString(payload)
+	if err != nil {
+		return err
+	}
+	var idx IndexDef
+	idx.Name, rest, err = decodeString(rest)
+	if err != nil {
+		return err
+	}
+	idx.Column, rest, err = decodeString(rest)
+	if err != nil {
+		return err
+	}
+	if len(rest) < 1 {
+		return fmt.Errorf("truncated create index unique flag")
+	}
+	idx.Unique = rest[0] != 0
+	return h.OnCreateIndex(table, idx)
+}
+
+func replayDropIndex(payload []byte, h ReplayHandler) error {
+	table, rest, err := decodeString(payload)
+	if err != nil {
+		return err
+	}
+	indexName, _, err := decodeString(rest)
+	if err != nil {
+		return err
+	}
+	return h.OnDropIndex(table, indexName)
 }

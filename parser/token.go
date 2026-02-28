@@ -85,6 +85,8 @@ const (
 	TokenIn          // IN
 	TokenFloatKW     // FLOAT (data type keyword)
 	TokenDoubleKW    // DOUBLE (first word of DOUBLE PRECISION)
+	TokenIndex       // INDEX
+	TokenUnique      // UNIQUE
 )
 
 var tokenNames = map[TokenType]string{
@@ -158,6 +160,8 @@ var tokenNames = map[TokenType]string{
 	TokenIn:          "IN",
 	TokenFloatKW:     "FLOAT",
 	TokenDoubleKW:    "DOUBLE",
+	TokenIndex:       "INDEX",
+	TokenUnique:      "UNIQUE",
 }
 
 func (t TokenType) String() string {
@@ -226,6 +230,8 @@ var keywords = map[string]TokenType{
 	"IN":          TokenIn,
 	"FLOAT":       TokenFloatKW,
 	"DOUBLE":      TokenDoubleKW,
+	"INDEX":       TokenIndex,
+	"UNIQUE":      TokenUnique,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

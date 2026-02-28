@@ -230,3 +230,173 @@ func TestBTree_GetEmpty(t *testing.T) {
 		t.Error("get from empty tree should return false")
 	}
 }
+
+// -------------------------------------------------------------------------
+// MultiBTree tests
+// -------------------------------------------------------------------------
+
+func TestMultiBTree_PutAndGetAll(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	mt.Put(int64(10), 1)
+	mt.Put(int64(10), 2)
+	mt.Put(int64(10), 3)
+	mt.Put(int64(20), 4)
+
+	ids := mt.GetAll(int64(10))
+	if len(ids) != 3 {
+		t.Fatalf("GetAll(10) returned %d results, want 3", len(ids))
+	}
+	// Should be in rowID order.
+	for i, want := range []int64{1, 2, 3} {
+		if ids[i] != want {
+			t.Errorf("GetAll(10)[%d] = %d, want %d", i, ids[i], want)
+		}
+	}
+
+	ids = mt.GetAll(int64(20))
+	if len(ids) != 1 || ids[0] != 4 {
+		t.Errorf("GetAll(20) = %v, want [4]", ids)
+	}
+
+	ids = mt.GetAll(int64(99))
+	if len(ids) != 0 {
+		t.Errorf("GetAll(99) = %v, want []", ids)
+	}
+}
+
+func TestMultiBTree_Delete(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	mt.Put(int64(10), 1)
+	mt.Put(int64(10), 2)
+	mt.Put(int64(10), 3)
+
+	if !mt.Delete(int64(10), 2) {
+		t.Fatal("delete (10, 2) should return true")
+	}
+
+	ids := mt.GetAll(int64(10))
+	if len(ids) != 2 {
+		t.Fatalf("GetAll(10) after delete returned %d results, want 2", len(ids))
+	}
+	for i, want := range []int64{1, 3} {
+		if ids[i] != want {
+			t.Errorf("GetAll(10)[%d] = %d, want %d", i, ids[i], want)
+		}
+	}
+
+	// Delete non-existent pair.
+	if mt.Delete(int64(10), 99) {
+		t.Error("delete (10, 99) should return false")
+	}
+}
+
+func TestMultiBTree_DeleteAll(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	mt.Put(int64(5), 1)
+	mt.Put(int64(5), 2)
+
+	mt.Delete(int64(5), 1)
+	mt.Delete(int64(5), 2)
+
+	ids := mt.GetAll(int64(5))
+	if len(ids) != 0 {
+		t.Errorf("GetAll(5) after deleting all = %v, want []", ids)
+	}
+
+	// Re-insert after deleting all.
+	mt.Put(int64(5), 10)
+	ids = mt.GetAll(int64(5))
+	if len(ids) != 1 || ids[0] != 10 {
+		t.Errorf("GetAll(5) after re-insert = %v, want [10]", ids)
+	}
+}
+
+func TestMultiBTree_GetAllEmpty(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	ids := mt.GetAll(int64(1))
+	if ids != nil {
+		t.Errorf("GetAll on empty tree = %v, want nil", ids)
+	}
+}
+
+func TestMultiBTree_StringKeys(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	mt.Put("alice", 1)
+	mt.Put("alice", 2)
+	mt.Put("bob", 3)
+
+	ids := mt.GetAll("alice")
+	if len(ids) != 2 {
+		t.Fatalf("GetAll(alice) returned %d results, want 2", len(ids))
+	}
+	if ids[0] != 1 || ids[1] != 2 {
+		t.Errorf("GetAll(alice) = %v, want [1 2]", ids)
+	}
+
+	ids = mt.GetAll("bob")
+	if len(ids) != 1 || ids[0] != 3 {
+		t.Errorf("GetAll(bob) = %v, want [3]", ids)
+	}
+}
+
+func TestMultiBTree_LargeInsert(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	const nKeys = 100
+	const nRowsPerKey = 50
+
+	// Insert nRowsPerKey rows for each of nKeys keys.
+	for k := int64(0); k < nKeys; k++ {
+		for r := int64(0); r < nRowsPerKey; r++ {
+			mt.Put(k, k*1000+r)
+		}
+	}
+
+	// Verify each key returns exactly nRowsPerKey results.
+	for k := int64(0); k < nKeys; k++ {
+		ids := mt.GetAll(k)
+		if len(ids) != nRowsPerKey {
+			t.Fatalf("GetAll(%d) returned %d results, want %d", k, len(ids), nRowsPerKey)
+		}
+		// Verify rowIDs are in order.
+		for i := 1; i < len(ids); i++ {
+			if ids[i] <= ids[i-1] {
+				t.Fatalf("GetAll(%d) not in order: ids[%d]=%d >= ids[%d]=%d",
+					k, i-1, ids[i-1], i, ids[i])
+			}
+		}
+	}
+
+	// Non-existent key.
+	ids := mt.GetAll(int64(999))
+	if len(ids) != 0 {
+		t.Errorf("GetAll(999) = %v, want []", ids)
+	}
+}
+
+func TestMultiBTree_LargeDelete(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+
+	// Insert 5 rows per key for 200 keys.
+	for k := int64(0); k < 200; k++ {
+		for r := int64(0); r < 5; r++ {
+			mt.Put(k, k*100+r)
+		}
+	}
+
+	// Delete even-numbered rowIDs for each key.
+	for k := int64(0); k < 200; k++ {
+		for r := int64(0); r < 5; r += 2 {
+			if !mt.Delete(k, k*100+r) {
+				t.Fatalf("delete (%d, %d) should return true", k, k*100+r)
+			}
+		}
+	}
+
+	// Verify odd-numbered rowIDs remain.
+	for k := int64(0); k < 200; k++ {
+		ids := mt.GetAll(k)
+		if len(ids) != 2 { // rows 1 and 3 remain
+			t.Fatalf("GetAll(%d) after delete returned %d results, want 2", k, len(ids))
+		}
+	}
+}

@@ -42,6 +42,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
 - **SQL support** — CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
+- **Secondary indexes** — `CREATE [UNIQUE] INDEX [name] ON table(column)` and `DROP INDEX name ON table`; optional index names (auto-generated as `idx_{column}`); table-scoped names; automatic query acceleration for `WHERE col = literal`; NULL values not indexed (multiple NULLs allowed in UNIQUE indexes per SQL standard)
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
 - **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `NOW()`, `VERSION()`, math functions (`ABS`, `ROUND`, `CEIL`/`CEILING`, `FLOOR`, `POWER`/`POW`, `SQRT`, `MOD`), and a registration pattern for adding more
@@ -143,6 +144,11 @@ DROP TABLE <name>;
 -- Alter a table
 ALTER TABLE <name> ADD [COLUMN] <column> <type>;
 ALTER TABLE <name> DROP [COLUMN] <column>;
+
+-- Create / drop indexes
+CREATE INDEX [<name>] ON <table>(<column>);         -- non-unique index
+CREATE UNIQUE INDEX [<name>] ON <table>(<column>);   -- unique index
+DROP INDEX <name> ON <table>;
 
 -- Insert one or more rows
 INSERT INTO <table> (<columns>) VALUES (<values>), (<values>);
@@ -915,18 +921,17 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 | `42P07` | Duplicate table | `CREATE TABLE t (...)` when `t` exists |
 | `42703` | Undefined column | `SELECT bad_col FROM t` |
 | `22023` | Invalid parameter value | Wrong number of INSERT values |
-| `23505` | Unique violation | Inserting a duplicate primary key value |
+| `23505` | Unique violation | Inserting a duplicate primary key or unique index value |
 | `42803` | Grouping error | Mixing aggregate and non-aggregate columns |
 | `42809` | Wrong object type | `INSERT INTO pg_type ...` (catalog is read-only) |
 | `42883` | Undefined function | Unknown aggregate function or type mismatch |
 | `22012` | Division by zero | `SELECT 1 / 0` |
+| `42704` | Undefined object | `DROP INDEX nonexistent ON t` |
 | `0A000` | Feature not supported | ORDER BY with aggregates (no GROUP BY) |
 
 ## Limitations
 
 mulldb is intentionally minimal. Things it does **not** support:
-
-- **Secondary indexes** — only primary key columns are indexed; other columns do full table scans
 - **Multi-column primary keys** — only single-column PRIMARY KEY is supported
 - **Transactions** — BEGIN/COMMIT/ROLLBACK are accepted but are no-ops; every statement auto-commits and there is no rollback or isolation
 - **LEFT/RIGHT/FULL OUTER JOINs** — only INNER JOIN is supported

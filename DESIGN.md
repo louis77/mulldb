@@ -221,11 +221,25 @@ The B-tree's deletion implementation is deliberately simplified — it doesn't r
 
 The index is used for two things: **fast unique constraint checking** during Insert and Update (O(log n) instead of O(n) scan), and **primary key lookups** in the executor when a WHERE clause is a simple equality on the PK column.
 
+### Secondary Indexes
+
+Secondary indexes are created via `CREATE [UNIQUE] INDEX [name] ON table(column)` and dropped via `DROP INDEX name ON table`. Index metadata is stored in the catalog WAL (`opCreateIndex=8`, `opDropIndex=9`) and the in-memory indexes are rebuilt from row data during WAL replay.
+
+**Index types.** UNIQUE indexes use the same `Index` interface as primary keys (key→single rowID). Non-unique indexes use the `MultiIndex` interface, backed by a `MultiBTree` that stores composite `(key, rowID)` entries — this makes every entry unique internally while allowing duplicate user keys. `GetAll(key)` traverses the tree to collect all rowIDs matching a key.
+
+**Index names are table-scoped.** Two tables can have an index with the same name. `DROP INDEX` requires `ON table` to disambiguate. Names are optional in `CREATE INDEX` — if omitted, auto-generated as `idx_{column}`.
+
+**NULL handling.** NULL values are not indexed. This means: (1) multiple NULLs are allowed in UNIQUE indexes (SQL standard), (2) `WHERE col = NULL` never uses the index (correct, since `= NULL` always yields NULL/false), and (3) NULLs have zero index maintenance cost.
+
+**Write path maintenance.** Insert, Update, and Delete all maintain secondary indexes alongside primary key indexes. For unique secondary indexes, constraint violations trigger rollback of earlier index changes within the same operation, keeping the index consistent even on failure.
+
+**Query acceleration.** The executor detects `WHERE col = literal` patterns on indexed columns and uses `LookupByIndex` instead of a full table scan — the same pattern as PK lookups but extended to secondary indexes.
+
 ### Pre-Validation Before WAL
 
-Insert and Update operations validate all constraints (unique violations, null PK, batch duplicates) before writing to the WAL. This is a deliberate design choice: if validation fails, no WAL entry is written and no state changes. This gives atomic semantics — either all rows in a batch insert succeed, or none do — without needing a rollback mechanism.
+Insert and Update operations validate all constraints (unique violations, null PK, batch duplicates, secondary index uniqueness) before writing to the WAL. This is a deliberate design choice: if validation fails, no WAL entry is written and no state changes. This gives atomic semantics — either all rows in a batch insert succeed, or none do — without needing a rollback mechanism.
 
-For batch inserts, the engine first checks for duplicates within the batch itself (using a temporary `map[any]bool`), then checks each key against the existing index. Only after all rows pass validation does the WAL write proceed.
+For batch inserts, the engine first checks for duplicates within the batch itself (using a temporary `map[any]bool`), then checks each key against the existing primary key and unique secondary indexes. Only after all rows pass validation does the WAL write proceed.
 
 ## The Executor
 

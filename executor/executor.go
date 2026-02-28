@@ -118,6 +118,18 @@ func (e *Executor) execute(sql string, tr *Trace) (*Result, error) {
 			tr.Table = s.Table.Name
 		}
 		return e.execAlterTableDropColumn(s, tr)
+	case *parser.CreateIndexStmt:
+		if tr != nil {
+			tr.StmtType = "CREATE INDEX"
+			tr.Table = s.Table.Name
+		}
+		return e.execCreateIndex(s, tr)
+	case *parser.DropIndexStmt:
+		if tr != nil {
+			tr.StmtType = "DROP INDEX"
+			tr.Table = s.Table.Name
+		}
+		return e.execDropIndex(s, tr)
 	default:
 		return nil, &QueryError{Code: "42601", Message: fmt.Sprintf("unsupported statement type %T", stmt)}
 	}
@@ -228,6 +240,58 @@ func (e *Executor) execAlterTableDropColumn(s *parser.AlterTableDropColumnStmt, 
 	}
 
 	return &Result{Tag: "ALTER TABLE"}, nil
+}
+
+func (e *Executor) execCreateIndex(s *parser.CreateIndexStmt, tr *Trace) (*Result, error) {
+	if isCatalogTable(s.Table.Schema, s.Table.Name) {
+		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot create index on catalog table %q", s.Table.String())}
+	}
+
+	name := s.Name
+	if name == "" {
+		name = "idx_" + s.Column
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
+	idx := storage.IndexDef{
+		Name:   name,
+		Column: s.Column,
+		Unique: s.Unique,
+	}
+	if err := e.engine.CreateIndex(s.Table.Name, idx); err != nil {
+		return nil, WrapError(err)
+	}
+
+	if tr != nil {
+		tr.Exec = time.Since(execStart)
+	}
+
+	return &Result{Tag: "CREATE INDEX"}, nil
+}
+
+func (e *Executor) execDropIndex(s *parser.DropIndexStmt, tr *Trace) (*Result, error) {
+	if isCatalogTable(s.Table.Schema, s.Table.Name) {
+		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot drop index on catalog table %q", s.Table.String())}
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
+	if err := e.engine.DropIndex(s.Table.Name, s.Name); err != nil {
+		return nil, WrapError(err)
+	}
+
+	if tr != nil {
+		tr.Exec = time.Since(execStart)
+	}
+
+	return &Result{Tag: "DROP INDEX"}, nil
 }
 
 func (e *Executor) execInsert(s *parser.InsertStmt, tr *Trace) (*Result, error) {
@@ -406,6 +470,82 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 					textRow[i] = formatValue(eval(*row))
 				}
 				resultRows = [][][]byte{textRow}
+			}
+			if tr != nil {
+				tr.RowsReturned = int64(len(resultRows))
+				tr.Exec = time.Since(execStart)
+			}
+			return &Result{
+				Columns: resultCols,
+				Rows:    resultRows,
+				Tag:     fmt.Sprintf("SELECT %d", len(resultRows)),
+			}, nil
+		}
+	}
+
+	// Try secondary index lookup for simple equality on an indexed column.
+	if !isCatalog && s.Where != nil {
+		if rows, ok := e.trySecondaryLookup(s.Where, def); ok {
+			if tr != nil {
+				tr.UsedIndex = true
+				tr.RowsScanned = int64(len(rows))
+			}
+			var resultRows [][][]byte
+			var offset int64
+			if s.Offset != nil {
+				offset = *s.Offset
+			}
+			limit := int64(-1)
+			if s.Limit != nil {
+				limit = *s.Limit
+			}
+
+			// Optionally sort.
+			if len(orderKeys) > 0 {
+				sort.SliceStable(rows, func(i, j int) bool {
+					for _, ok := range orderKeys {
+						vi := storage.RowValue(rows[i].Values, ok.colIdx)
+						vj := storage.RowValue(rows[j].Values, ok.colIdx)
+						c := storage.CompareValues(vi, vj)
+						if c == -2 {
+							// NULLs sort last.
+							if vi == nil && vj == nil {
+								continue
+							}
+							if vi == nil {
+								return false
+							}
+							return true
+						}
+						if c == 0 {
+							continue
+						}
+						if ok.desc {
+							return c > 0
+						}
+						return c < 0
+					}
+					return false
+				})
+			}
+
+			var skipped int64
+			for _, row := range rows {
+				if filter != nil && !filter(row) {
+					continue
+				}
+				if skipped < offset {
+					skipped++
+					continue
+				}
+				if limit >= 0 && int64(len(resultRows)) >= limit {
+					break
+				}
+				textRow := make([][]byte, len(colEvals))
+				for i, eval := range colEvals {
+					textRow[i] = formatValue(eval(row))
+				}
+				resultRows = append(resultRows, textRow)
 			}
 			if tr != nil {
 				tr.RowsReturned = int64(len(resultRows))
@@ -2158,6 +2298,48 @@ func (e *Executor) tryPKLookup(where parser.Expr, def *storage.TableDef) (*stora
 		return nil, false
 	}
 	return row, true
+}
+
+// trySecondaryLookup checks if the WHERE expression is a simple "col = literal"
+// equality on an indexed column and if so, performs an indexed lookup.
+// Returns the matching rows and true if a secondary index was used.
+func (e *Executor) trySecondaryLookup(where parser.Expr, def *storage.TableDef) ([]storage.Row, bool) {
+	bin, ok := where.(*parser.BinaryExpr)
+	if !ok || bin.Op != "=" {
+		return nil, false
+	}
+
+	colRef, lit := extractColumnAndLiteral(bin)
+	if colRef == nil || lit == nil {
+		return nil, false
+	}
+
+	// Find a secondary index on this column.
+	colOrd := columnIndex(def, colRef.Name)
+	if colOrd < 0 {
+		return nil, false
+	}
+	var idxName string
+	for _, idx := range def.Indexes {
+		if columnIndex(def, idx.Column) == colOrd {
+			idxName = idx.Name
+			break
+		}
+	}
+	if idxName == "" {
+		return nil, false
+	}
+
+	val, err := evalLiteral(lit)
+	if err != nil || val == nil {
+		return nil, false
+	}
+
+	rows, err := e.engine.LookupByIndex(def.Name, idxName, val)
+	if err != nil {
+		return nil, false
+	}
+	return rows, true
 }
 
 // extractColumnAndLiteral checks if a binary expression has a ColumnRef on one

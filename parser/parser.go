@@ -66,9 +66,9 @@ func (p *parser) unexpected() error {
 func (p *parser) parseStatement() (Statement, error) {
 	switch p.cur.Type {
 	case TokenCreate:
-		return p.parseCreateTable()
+		return p.parseCreate()
 	case TokenDrop:
-		return p.parseDropTable()
+		return p.parseDrop()
 	case TokenAlter:
 		return p.parseAlterTable()
 	case TokenInsert:
@@ -109,11 +109,27 @@ func (p *parser) parseTableRef() (TableRef, error) {
 	return TableRef{Name: name.Literal}, nil
 }
 
-func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
+func (p *parser) parseCreate() (Statement, error) {
 	p.next() // skip CREATE
-	if _, err := p.expect(TokenTable); err != nil {
-		return nil, err
+	switch p.cur.Type {
+	case TokenTable:
+		return p.parseCreateTable()
+	case TokenIndex:
+		p.next() // skip INDEX
+		return p.parseCreateIndex(false)
+	case TokenUnique:
+		p.next() // skip UNIQUE
+		if _, err := p.expect(TokenIndex); err != nil {
+			return nil, err
+		}
+		return p.parseCreateIndex(true)
+	default:
+		return nil, p.unexpected()
 	}
+}
+
+func (p *parser) parseCreateTable() (*CreateTableStmt, error) {
+	p.next() // skip TABLE
 	ref, err := p.parseTableRef()
 	if err != nil {
 		return nil, err
@@ -210,16 +226,80 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 	return ColumnDef{Name: name.Literal, DataType: dataType, PrimaryKey: pk}, nil
 }
 
-func (p *parser) parseDropTable() (*DropTableStmt, error) {
+func (p *parser) parseDrop() (Statement, error) {
 	p.next() // skip DROP
-	if _, err := p.expect(TokenTable); err != nil {
+	switch p.cur.Type {
+	case TokenTable:
+		return p.parseDropTable()
+	case TokenIndex:
+		return p.parseDropIndex()
+	default:
+		return nil, p.unexpected()
+	}
+}
+
+func (p *parser) parseDropTable() (*DropTableStmt, error) {
+	p.next() // skip TABLE
+	ref, err := p.parseTableRef()
+	if err != nil {
+		return nil, err
+	}
+	return &DropTableStmt{Name: ref}, nil
+}
+
+// parseCreateIndex parses: [name] ON table(column)
+// The INDEX keyword has already been consumed.
+func (p *parser) parseCreateIndex(unique bool) (*CreateIndexStmt, error) {
+	var name string
+	// If the next token is ON, no name was given. Otherwise read the name.
+	if p.cur.Type != TokenOn {
+		tok, err := p.expect(TokenIdent)
+		if err != nil {
+			return nil, err
+		}
+		name = tok.Literal
+	}
+	if _, err := p.expect(TokenOn); err != nil {
 		return nil, err
 	}
 	ref, err := p.parseTableRef()
 	if err != nil {
 		return nil, err
 	}
-	return &DropTableStmt{Name: ref}, nil
+	if _, err := p.expect(TokenLParen); err != nil {
+		return nil, err
+	}
+	col, err := p.expect(TokenIdent)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(TokenRParen); err != nil {
+		return nil, err
+	}
+	return &CreateIndexStmt{
+		Name:   name,
+		Table:  ref,
+		Column: col.Literal,
+		Unique: unique,
+	}, nil
+}
+
+// parseDropIndex parses: INDEX name ON table
+// The DROP keyword has already been consumed.
+func (p *parser) parseDropIndex() (*DropIndexStmt, error) {
+	p.next() // skip INDEX
+	name, err := p.expect(TokenIdent)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(TokenOn); err != nil {
+		return nil, err
+	}
+	ref, err := p.parseTableRef()
+	if err != nil {
+		return nil, err
+	}
+	return &DropIndexStmt{Name: name.Literal, Table: ref}, nil
 }
 
 func (p *parser) parseAlterTable() (Statement, error) {

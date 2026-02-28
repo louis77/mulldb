@@ -12,7 +12,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Wire protocol | PostgreSQL v3 (simple query flow) |
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
-| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). IN predicate (`IN`, `NOT IN`). Double-quoted identifiers for reserved words and case preservation. |
+| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. `CREATE [UNIQUE] INDEX`, `DROP INDEX`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). IN predicate (`IN`, `NOT IN`). Double-quoted identifiers for reserved words and case preservation. |
 | Data types | `INTEGER`, `FLOAT` (64-bit IEEE 754), `TEXT`, `BOOLEAN`, `TIMESTAMP` (UTC-only) |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
@@ -338,8 +338,8 @@ The following features are **required** to move from "correct prototype" to "min
 | Priority | Feature | Gap Analysis | Implementation Notes |
 |----------|---------|--------------|---------------------|
 | P0 | **ACID Transactions** | `BEGIN/COMMIT/ROLLBACK` are no-ops; every statement auto-commits. Concurrent writes to the same table can leave partial state on crash. | Need transaction manager with undo log, atomic commit protocol. Current per-table locking is insufficient for atomic multi-table operations. |
-| P0 | **Secondary Indexes** | Only PRIMARY KEY has a B-tree index. All other columns require full table scans (`O(n)`). Unusable for even medium-sized tables. | Need `CREATE INDEX` DDL, index metadata in catalog, index maintenance on INSERT/UPDATE/DELETE, query optimizer to choose index vs scan. |
-| P0 | **UNIQUE Constraints** | Only PK uniqueness is enforced. Business keys (e.g., `email`, `sku`) can have duplicates. | Similar to PK but nullable. Requires index + constraint validation. |
+| ~~P0~~ | ~~**Secondary Indexes**~~ | ✅ Done. `CREATE [UNIQUE] INDEX [name] ON table(column)`, `DROP INDEX name ON table`. Table-scoped names, auto-generated names, NULL handling, query acceleration for `WHERE col = literal`. | Implemented with `MultiIndex` interface for non-unique indexes, WAL ops 8/9, rebuild on replay. |
+| ~~P0~~ | ~~**UNIQUE Constraints**~~ | ✅ Done (via `CREATE UNIQUE INDEX`). Business keys enforce uniqueness through secondary indexes. Multiple NULLs allowed per SQL standard. | Uses same B-tree infrastructure as PK indexes. Full rollback on violation. |
 | P0 | **Foreign Key Constraints** | No referential integrity checking. JOIN tables can have orphaned references. | Need FK metadata in catalog, validation on INSERT/UPDATE (parent exists), cascading actions, deferred checks. |
 | P0 | **CHECK Constraints** | No data validation beyond type checking. Invalid data (e.g., negative prices) can be inserted. | Parser has expression framework; need constraint metadata, evaluation on write. |
 
@@ -357,7 +357,7 @@ The following features are **required** to move from "correct prototype" to "min
 
 | Priority | Feature | Gap Analysis | Implementation Notes |
 |----------|---------|--------------|---------------------|
-| P2 | **CREATE/DROP INDEX** | Indexes only created implicitly with PK. No way to add indexes as query patterns evolve. | DDL parser extensions, catalog storage for indexes, background index build, index selection in optimizer. |
+| ~~P2~~ | ~~**CREATE/DROP INDEX**~~ | ✅ Done. See Secondary Indexes in Tier 1. | Implemented in Phase 7. |
 | P2 | **Advanced ALTER TABLE** | Only ADD/DROP COLUMN. Cannot rename columns, change types, add constraints without table rebuild. | Ordinals currently immutable; need column rename metadata-only ops, type coercion for ALTER COLUMN. |
 | P2 | **Views** | No way to encapsulate complex queries. No security through abstraction. | View metadata in catalog, view expansion in executor (replace view ref with subquery). |
 | P2 | **Basic Query Optimizer** | No statistics; nested-loop joins only; no index-vs-scan decision. Query performance unpredictable. | Need table statistics (row counts, distinct values), cost model, join ordering heuristics. |
@@ -372,8 +372,8 @@ The following features are **required** to move from "correct prototype" to "min
 4. Foreign key constraints
 
 #### Phase 7: Indexes & Performance
-1. Secondary index infrastructure (B-tree reuse)
-2. `CREATE INDEX` / `DROP INDEX`
+1. ~~Secondary index infrastructure (B-tree reuse)~~ ✅
+2. ~~`CREATE INDEX` / `DROP INDEX`~~ ✅
 3. Query optimizer with cost-based index selection
 4. Row-level locking (replace table-level mutex)
 

@@ -155,7 +155,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | ID | Feature | Status |
 |----|---------|--------|
 | E141-01 | NOT NULL constraints | **Partial** (implicit on PRIMARY KEY only; no standalone NOT NULL) |
-| E141-02 | UNIQUE constraints of NOT NULL columns | Open |
+| E141-02 | UNIQUE constraints of NOT NULL columns | **Partial** (via `CREATE UNIQUE INDEX`; no inline column constraint syntax yet) |
 | E141-03 | PRIMARY KEY constraints | **Done** (single-column, B-tree indexed) |
 | E141-04 | Basic FOREIGN KEY constraint with NO ACTION default | Open |
 | E141-06 | CHECK constraints | Open |
@@ -221,6 +221,8 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | F031-03 | GRANT statement | Open |
 | F031-04 | ALTER TABLE: ADD COLUMN clause | **Done** (ADD COLUMN and DROP COLUMN via ordinal-based storage) |
 | F031-13 | DROP TABLE: RESTRICT clause | **Partial** (DROP TABLE works; no RESTRICT/CASCADE semantics) |
+| F031-14 | CREATE INDEX statement | **Done** (single-column; both UNIQUE and non-unique; optional index names) |
+| F031-15 | DROP INDEX statement | **Done** (`DROP INDEX name ON table`; table-scoped names) |
 | F031-16 | DROP VIEW: RESTRICT clause | Open |
 | F031-19 | REVOKE statement: RESTRICT clause | Open |
 
@@ -345,13 +347,14 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~46 |
-| **Partial** | ~8 |
-| **Open** | ~123 |
+| **Done** | ~49 |
+| **Partial** | ~9 |
+| **Open** | ~120 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
 - Primary key constraints with B-tree index
+- Secondary indexes (CREATE INDEX, DROP INDEX, query acceleration)
 - Identifiers (delimited and case-insensitive)
 - Aggregate functions (COUNT, SUM, MIN, MAX)
 - ORDER BY (single/multi-column, ASC/DESC, NULLs last)
@@ -367,6 +370,6 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet
 5. **Transactions**: No BEGIN / COMMIT / ROLLBACK
 6. **Data types**: No decimal, DATE, or TIME types (TIMESTAMP and FLOAT are done)
-7. **Constraints**: No UNIQUE, FOREIGN KEY, CHECK, DEFAULT
+7. **Constraints**: UNIQUE via CREATE UNIQUE INDEX; no FOREIGN KEY, CHECK, DEFAULT
 8. **Subqueries**: No subquery support anywhere
 9. **UNION / EXCEPT**: No set operations

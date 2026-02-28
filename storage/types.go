@@ -38,11 +38,19 @@ type ColumnDef struct {
 	Ordinal    int // permanent position index; never reused after DROP COLUMN
 }
 
+// IndexDef describes a secondary index on a table.
+type IndexDef struct {
+	Name   string // index name (unique within the table)
+	Column string // indexed column name
+	Unique bool   // true for UNIQUE indexes
+}
+
 // TableDef describes the schema of a table.
 type TableDef struct {
 	Name        string
 	Columns     []ColumnDef
 	NextOrdinal int // next ordinal to assign on ADD COLUMN
+	Indexes     []IndexDef
 }
 
 // PrimaryKeyColumn returns the ordinal of the primary key column,
@@ -119,11 +127,12 @@ func (e *ValueCountError) Error() string {
 }
 
 // UniqueViolationError is returned when an INSERT or UPDATE would
-// violate a primary key uniqueness constraint.
+// violate a uniqueness constraint (primary key or unique index).
 type UniqueViolationError struct {
 	Table  string
 	Column string
 	Value  any
+	Index  string // index name, if violation came from a secondary index
 }
 
 func (e *UniqueViolationError) Error() string {
@@ -140,6 +149,26 @@ func (e *ColumnExistsError) Error() string {
 	return fmt.Sprintf("column %q of relation %q already exists", e.Column, e.Table)
 }
 
+// IndexExistsError is returned when creating an index that already exists.
+type IndexExistsError struct {
+	Name  string
+	Table string
+}
+
+func (e *IndexExistsError) Error() string {
+	return fmt.Sprintf("index %q already exists on table %q", e.Name, e.Table)
+}
+
+// IndexNotFoundError is returned when referencing an index that does not exist.
+type IndexNotFoundError struct {
+	Name  string
+	Table string
+}
+
+func (e *IndexNotFoundError) Error() string {
+	return fmt.Sprintf("index %q does not exist on table %q", e.Name, e.Table)
+}
+
 // Engine is the storage layer interface. The executor depends on this
 // contract, never on the concrete implementation.
 type Engine interface {
@@ -154,5 +183,8 @@ type Engine interface {
 	Update(table string, sets map[string]any, filter func(Row) bool) (int64, error)
 	Delete(table string, filter func(Row) bool) (int64, error)
 	LookupByPK(table string, value any) (*Row, error)
+	CreateIndex(table string, idx IndexDef) error
+	DropIndex(table string, indexName string) error
+	LookupByIndex(table string, indexName string, value any) ([]Row, error)
 	Close() error
 }

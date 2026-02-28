@@ -149,6 +149,14 @@ func (e *engine) openTableState(def TableDef, tablesDir string, migrate bool) (*
 		return nil, fmt.Errorf("replay: %w", err)
 	}
 
+	// Initialize and populate secondary indexes from the catalog metadata.
+	for _, idx := range def.Indexes {
+		if err := heap.addSecondaryIndex(idx); err != nil {
+			w.Close()
+			return nil, fmt.Errorf("build index %q: %w", idx.Name, err)
+		}
+	}
+
 	return &tableState{heap: heap, wal: w}, nil
 }
 
@@ -242,6 +250,14 @@ func (h *catalogReplayHandler) OnDropColumn(table string, colName string) error 
 	return h.catalog.dropColumn(table, colName)
 }
 
+func (h *catalogReplayHandler) OnCreateIndex(table string, idx IndexDef) error {
+	return h.catalog.createIndex(table, idx)
+}
+
+func (h *catalogReplayHandler) OnDropIndex(table string, indexName string) error {
+	return h.catalog.dropIndex(table, indexName)
+}
+
 func (h *catalogReplayHandler) OnInsert(string, int64, []any) error {
 	return fmt.Errorf("unexpected INSERT in catalog WAL")
 }
@@ -275,6 +291,14 @@ func (h *dmlReplayHandler) OnAddColumn(string, ColumnDef) error {
 
 func (h *dmlReplayHandler) OnDropColumn(string, string) error {
 	return fmt.Errorf("unexpected DROP COLUMN in table WAL for %q", h.tableName)
+}
+
+func (h *dmlReplayHandler) OnCreateIndex(string, IndexDef) error {
+	return fmt.Errorf("unexpected CREATE INDEX in table WAL for %q", h.tableName)
+}
+
+func (h *dmlReplayHandler) OnDropIndex(string, string) error {
+	return fmt.Errorf("unexpected DROP INDEX in table WAL for %q", h.tableName)
 }
 
 func (h *dmlReplayHandler) OnInsert(table string, rowID int64, values []any) error {
@@ -462,6 +486,117 @@ func (e *engine) DropColumn(table string, colName string) error {
 	return nil
 }
 
+func (e *engine) CreateIndex(table string, idx IndexDef) error {
+	e.catalogMu.Lock()
+	defer e.catalogMu.Unlock()
+
+	ts, err := e.getTableState(table)
+	if err != nil {
+		return err
+	}
+
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.dropped {
+		return &TableNotFoundError{Name: table}
+	}
+
+	// Validate column exists.
+	colExists := false
+	for _, col := range ts.heap.def.Columns {
+		if col.Name == idx.Column {
+			colExists = true
+			break
+		}
+	}
+	if !colExists {
+		return &ColumnNotFoundError{Column: idx.Column, Table: table}
+	}
+
+	// Validate index name is unique within the table.
+	for _, existing := range ts.heap.def.Indexes {
+		if existing.Name == idx.Name {
+			return &IndexExistsError{Name: idx.Name, Table: table}
+		}
+	}
+
+	// Build the in-memory index from existing rows (validates uniqueness).
+	if err := ts.heap.addSecondaryIndex(idx); err != nil {
+		return err
+	}
+
+	// Write to catalog WAL.
+	if err := e.catalogWAL.WriteCreateIndex(table, idx); err != nil {
+		// Roll back the in-memory index.
+		ts.heap.removeSecondaryIndex(idx.Name)
+		return fmt.Errorf("catalog WAL: %w", err)
+	}
+
+	// Update catalog.
+	e.catalog.createIndex(table, idx)
+	ts.heap.def = *e.catalog.tables[table]
+	return nil
+}
+
+func (e *engine) DropIndex(table string, indexName string) error {
+	e.catalogMu.Lock()
+	defer e.catalogMu.Unlock()
+
+	ts, err := e.getTableState(table)
+	if err != nil {
+		return err
+	}
+
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.dropped {
+		return &TableNotFoundError{Name: table}
+	}
+
+	// Validate index exists.
+	found := false
+	for _, idx := range ts.heap.def.Indexes {
+		if idx.Name == indexName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return &IndexNotFoundError{Name: indexName, Table: table}
+	}
+
+	// Write to catalog WAL.
+	if err := e.catalogWAL.WriteDropIndex(table, indexName); err != nil {
+		return fmt.Errorf("catalog WAL: %w", err)
+	}
+
+	// Update catalog and heap.
+	e.catalog.dropIndex(table, indexName)
+	ts.heap.removeSecondaryIndex(indexName)
+	ts.heap.def = *e.catalog.tables[table]
+	return nil
+}
+
+func (e *engine) LookupByIndex(table string, indexName string, value any) ([]Row, error) {
+	ts, err := e.acquireTableRead(table)
+	if err != nil {
+		return nil, err
+	}
+	defer ts.mu.RUnlock()
+
+	rows := ts.heap.lookupByIndex(indexName, value)
+	// Return copies to avoid data races.
+	result := make([]Row, len(rows))
+	for i, row := range rows {
+		vals := make([]any, len(row.Values))
+		copy(vals, row.Values)
+		result[i] = Row{ID: row.ID, Values: vals}
+	}
+	return result, nil
+}
+
 // -------------------------------------------------------------------------
 // Engine interface — read-only metadata
 // -------------------------------------------------------------------------
@@ -532,6 +667,38 @@ func (e *engine) Insert(table string, columns []string, values [][]any) (int64, 
 					Table:  table,
 					Column: pkColName,
 					Value:  key,
+				}
+			}
+		}
+	}
+
+	// Pre-validate unique secondary index constraints.
+	for i := range heap.secondaries {
+		si := &heap.secondaries[i]
+		if si.unique == nil {
+			continue
+		}
+		seen := make(map[any]bool, len(resolvedRows))
+		for _, fullRow := range resolvedRows {
+			key := RowValue(fullRow, si.colOrd)
+			if key == nil {
+				continue // NULLs don't violate unique constraints
+			}
+			if seen[key] {
+				return 0, &UniqueViolationError{
+					Table:  table,
+					Column: si.def.Column,
+					Value:  key,
+					Index:  si.def.Name,
+				}
+			}
+			seen[key] = true
+			if _, exists := si.unique.Get(key); exists {
+				return 0, &UniqueViolationError{
+					Table:  table,
+					Column: si.def.Column,
+					Value:  key,
+					Index:  si.def.Name,
 				}
 			}
 		}
@@ -617,6 +784,35 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 				if existingID, found := heap.pkIdx.Get(newKey); found && !updatingIDs[existingID] {
 					return 0, &UniqueViolationError{Table: table, Column: pkColName, Value: newKey}
 				}
+			}
+		}
+	}
+
+	// Pre-validate unique secondary index constraints before WAL write.
+	updatingIDs := make(map[int64]bool, len(updates))
+	for _, u := range updates {
+		updatingIDs[u.RowID] = true
+	}
+	for i := range heap.secondaries {
+		si := &heap.secondaries[i]
+		if si.unique == nil {
+			continue
+		}
+		if _, changing := sets[si.def.Column]; !changing {
+			continue
+		}
+		seen := make(map[any]bool, len(updates))
+		for _, u := range updates {
+			newKey := RowValue(u.Values, si.colOrd)
+			if newKey == nil {
+				continue // NULLs don't violate unique constraints
+			}
+			if seen[newKey] {
+				return 0, &UniqueViolationError{Table: table, Column: si.def.Column, Value: newKey, Index: si.def.Name}
+			}
+			seen[newKey] = true
+			if existingID, found := si.unique.Get(newKey); found && !updatingIDs[existingID] {
+				return 0, &UniqueViolationError{Table: table, Column: si.def.Column, Value: newKey, Index: si.def.Name}
 			}
 		}
 	}

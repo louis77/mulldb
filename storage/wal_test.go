@@ -501,3 +501,6 @@ func (h *testReplayHandler) OnUpdate(table string, updates []rowUpdate) error {
 	h.updates = append(h.updates, updateRecord{table: table, entries: updates})
 	return nil
 }
+
+func (h *testReplayHandler) OnCreateIndex(string, IndexDef) error { return nil }
+func (h *testReplayHandler) OnDropIndex(string, string) error     { return nil }
