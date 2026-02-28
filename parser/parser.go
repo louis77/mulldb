@@ -213,17 +213,28 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 		p.next() // consume ZONE
 	}
 
-	// Optional PRIMARY KEY constraint.
-	var pk bool
-	if p.cur.Type == TokenPrimary {
-		p.next()
-		if _, err := p.expect(TokenKey); err != nil {
-			return ColumnDef{}, err
+	// Optional column constraints: PRIMARY KEY, NOT NULL (in any order).
+	var pk, notNull bool
+	for {
+		if p.cur.Type == TokenPrimary {
+			p.next()
+			if _, err := p.expect(TokenKey); err != nil {
+				return ColumnDef{}, err
+			}
+			pk = true
+		} else if p.cur.Type == TokenNot {
+			p.next() // consume NOT
+			if p.cur.Type != TokenNull {
+				return ColumnDef{}, fmt.Errorf("expected NULL after NOT at position %d", p.cur.Pos)
+			}
+			p.next() // consume NULL
+			notNull = true
+		} else {
+			break
 		}
-		pk = true
 	}
 
-	return ColumnDef{Name: name.Literal, DataType: dataType, PrimaryKey: pk}, nil
+	return ColumnDef{Name: name.Literal, DataType: dataType, PrimaryKey: pk, NotNull: notNull}, nil
 }
 
 func (p *parser) parseDrop() (Statement, error) {

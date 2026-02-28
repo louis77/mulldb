@@ -1328,6 +1328,69 @@ func TestEngine_MigrateV2ToV3(t *testing.T) {
 	}
 }
 
+func TestEngine_MigrateV3ToV4(t *testing.T) {
+	dir := tempDir(t)
+	os.MkdirAll(filepath.Join(dir, "tables"), 0755)
+
+	// Write a v3 catalog WAL manually.
+	catPath := filepath.Join(dir, "catalog.wal")
+	f, err := os.Create(catPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write v3 header.
+	var hdr [6]byte
+	copy(hdr[:4], "MWAL")
+	hdr[4] = 0
+	hdr[5] = 3
+	f.Write(hdr[:])
+
+	// Write a v3 CREATE TABLE entry (with ordinals, no notNull).
+	buf := encodeString(nil, "users")
+	buf = appendUint16(buf, 2) // 2 columns
+	// col 0: id INTEGER PRIMARY KEY
+	buf = encodeString(buf, "id")
+	buf = append(buf, byte(TypeInteger))
+	buf = append(buf, 1) // pk = true
+	buf = appendUint16(buf, 0)
+	// col 1: name TEXT
+	buf = encodeString(buf, "name")
+	buf = append(buf, byte(TypeText))
+	buf = append(buf, 0) // pk = false
+	buf = appendUint16(buf, 1)
+	writeRawEntry(f, 1, buf) // opCreateTable = 1
+	f.Close()
+
+	// Create empty table WAL.
+	tablePath := filepath.Join(dir, "tables", "users.wal")
+	tf, _ := os.Create(tablePath)
+	writeWALHeader(tf)
+	tf.Close()
+
+	// Open with migrate=true — should migrate v3→v4.
+	eng, err := Open(dir, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer eng.Close()
+
+	def, ok := eng.GetTable("users")
+	if !ok {
+		t.Fatal("table not found after migration")
+	}
+	if len(def.Columns) != 2 {
+		t.Fatalf("got %d columns, want 2", len(def.Columns))
+	}
+	// PK column should have NotNull=true after migration.
+	if !def.Columns[0].NotNull {
+		t.Error("col[0].NotNull = false, want true (PK column)")
+	}
+	// Non-PK column should have NotNull=false after migration.
+	if def.Columns[1].NotNull {
+		t.Error("col[1].NotNull = true, want false (non-PK column)")
+	}
+}
+
 // appendUint16 is a test helper for encoding uint16 big-endian.
 func appendUint16(buf []byte, v uint16) []byte {
 	return append(buf, byte(v>>8), byte(v))

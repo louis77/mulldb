@@ -43,6 +43,7 @@ type ColumnDef struct {
 	Name       string
 	DataType   string // "INTEGER", "TEXT", or "BOOLEAN"
 	PrimaryKey bool
+	NotNull    bool
 }
 
 // SetClause represents a single col = expr assignment in UPDATE ... SET.

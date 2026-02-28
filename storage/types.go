@@ -35,6 +35,7 @@ type ColumnDef struct {
 	Name       string
 	DataType   DataType
 	PrimaryKey bool
+	NotNull    bool
 	Ordinal    int // permanent position index; never reused after DROP COLUMN
 }
 
@@ -137,6 +138,17 @@ type UniqueViolationError struct {
 
 func (e *UniqueViolationError) Error() string {
 	return fmt.Sprintf("duplicate key value violates unique constraint on column %q of table %q", e.Column, e.Table)
+}
+
+// NotNullViolationError is returned when an INSERT or UPDATE would
+// set a NOT NULL column to NULL.
+type NotNullViolationError struct {
+	Table  string
+	Column string
+}
+
+func (e *NotNullViolationError) Error() string {
+	return fmt.Sprintf("null value in column %q of relation %q violates not-null constraint", e.Column, e.Table)
 }
 
 // ColumnExistsError is returned when adding a column that already exists.

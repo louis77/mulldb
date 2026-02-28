@@ -642,6 +642,21 @@ func (e *engine) Insert(table string, columns []string, values [][]any) (int64, 
 		resolvedRows = append(resolvedRows, fullRow)
 	}
 
+	// Pre-validate NOT NULL constraints for all rows.
+	for _, col := range heap.def.Columns {
+		if !col.NotNull {
+			continue
+		}
+		for _, fullRow := range resolvedRows {
+			if RowValue(fullRow, col.Ordinal) == nil {
+				return 0, &NotNullViolationError{
+					Table:  table,
+					Column: col.Name,
+				}
+			}
+		}
+	}
+
 	// Pre-validate PK uniqueness for all rows before writing any WAL entries.
 	if heap.pkCol >= 0 {
 		pkColName := heap.pkColumnName()
@@ -760,6 +775,24 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 
 	if len(updates) == 0 {
 		return 0, nil
+	}
+
+	// Pre-validate NOT NULL constraints for columns being SET.
+	for _, col := range heap.def.Columns {
+		if !col.NotNull {
+			continue
+		}
+		if _, changing := sets[col.Name]; !changing {
+			continue
+		}
+		for _, u := range updates {
+			if RowValue(u.Values, col.Ordinal) == nil {
+				return 0, &NotNullViolationError{
+					Table:  table,
+					Column: col.Name,
+				}
+			}
+		}
 	}
 
 	// Pre-validate PK uniqueness before WAL write.

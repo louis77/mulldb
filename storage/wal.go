@@ -13,7 +13,7 @@ import (
 const (
 	walMagic          = "MWAL"
 	walHeaderSize     = 6 // 4 (magic) + 2 (version)
-	walCurrentVersion = 3 // v1 = legacy (no PK flag), v2 = PK flag, v3 = ordinals + ALTER TABLE
+	walCurrentVersion = 4 // v1 = legacy (no PK flag), v2 = PK flag, v3 = ordinals + ALTER TABLE, v4 = NOT NULL flag
 )
 
 // WAL operation types.
@@ -180,7 +180,7 @@ func (w *WAL) writeEntry(op byte, payload []byte) error {
 }
 
 // WriteCreateTable logs a CREATE TABLE operation.
-// v3 format: [table:str][colCount:u16] per col: [name:str][datatype:u8][pk:u8][ordinal:u16]
+// v4 format: [table:str][colCount:u16] per col: [name:str][datatype:u8][pk:u8][notNull:u8][ordinal:u16]
 func (w *WAL) WriteCreateTable(name string, columns []ColumnDef) error {
 	buf := encodeString(nil, name)
 	buf = binary.BigEndian.AppendUint16(buf, uint16(len(columns)))
@@ -192,6 +192,11 @@ func (w *WAL) WriteCreateTable(name string, columns []ColumnDef) error {
 			pkFlag = 1
 		}
 		buf = append(buf, pkFlag)
+		var nnFlag byte
+		if col.NotNull {
+			nnFlag = 1
+		}
+		buf = append(buf, nnFlag)
 		buf = binary.BigEndian.AppendUint16(buf, uint16(col.Ordinal))
 	}
 	return w.writeEntry(opCreateTable, buf)
@@ -203,7 +208,7 @@ func (w *WAL) WriteDropTable(name string) error {
 }
 
 // WriteAddColumn logs an ALTER TABLE ADD COLUMN operation.
-// Format: [table:str][name:str][datatype:u8][pk:u8][ordinal:u16]
+// v4 format: [table:str][name:str][datatype:u8][pk:u8][notNull:u8][ordinal:u16]
 func (w *WAL) WriteAddColumn(table string, col ColumnDef) error {
 	buf := encodeString(nil, table)
 	buf = encodeString(buf, col.Name)
@@ -213,6 +218,11 @@ func (w *WAL) WriteAddColumn(table string, col ColumnDef) error {
 		pkFlag = 1
 	}
 	buf = append(buf, pkFlag)
+	var nnFlag byte
+	if col.NotNull {
+		nnFlag = 1
+	}
+	buf = append(buf, nnFlag)
 	buf = binary.BigEndian.AppendUint16(buf, uint16(col.Ordinal))
 	return w.writeEntry(opAddColumn, buf)
 }
@@ -372,13 +382,14 @@ func replayCreateTable(payload []byte, h ReplayHandler) error {
 		if err != nil {
 			return err
 		}
-		if len(rest) < 4 { // datatype(1) + pk(1) + ordinal(2)
-			return fmt.Errorf("truncated column type/pk/ordinal")
+		if len(rest) < 5 { // datatype(1) + pk(1) + notNull(1) + ordinal(2)
+			return fmt.Errorf("truncated column type/pk/notNull/ordinal")
 		}
 		cols[i].DataType = DataType(rest[0])
 		cols[i].PrimaryKey = rest[1] != 0
-		cols[i].Ordinal = int(binary.BigEndian.Uint16(rest[2:4]))
-		rest = rest[4:]
+		cols[i].NotNull = rest[2] != 0
+		cols[i].Ordinal = int(binary.BigEndian.Uint16(rest[3:5]))
+		rest = rest[5:]
 	}
 	return h.OnCreateTable(name, cols)
 }
@@ -401,12 +412,13 @@ func replayAddColumn(payload []byte, h ReplayHandler) error {
 	if err != nil {
 		return err
 	}
-	if len(rest) < 4 { // datatype(1) + pk(1) + ordinal(2)
+	if len(rest) < 5 { // datatype(1) + pk(1) + notNull(1) + ordinal(2)
 		return fmt.Errorf("truncated add column data")
 	}
 	col.DataType = DataType(rest[0])
 	col.PrimaryKey = rest[1] != 0
-	col.Ordinal = int(binary.BigEndian.Uint16(rest[2:4]))
+	col.NotNull = rest[2] != 0
+	col.Ordinal = int(binary.BigEndian.Uint16(rest[3:5]))
 	return h.OnAddColumn(table, col)
 }
 
