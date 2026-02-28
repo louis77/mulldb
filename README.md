@@ -44,7 +44,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **SQL support** — CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **NOT NULL constraints** — standalone `NOT NULL` on any column; enforced on INSERT and UPDATE; PRIMARY KEY columns are implicitly NOT NULL
-- **Secondary indexes** — `CREATE [UNIQUE] INDEX [name] ON table(column)` and `DROP INDEX name ON table`; optional index names (auto-generated as `idx_{column}`); table-scoped names; automatic query acceleration for `WHERE col = literal`; NULL values not indexed (multiple NULLs allowed in UNIQUE indexes per SQL standard)
+- **Secondary indexes** — `CREATE [UNIQUE] INDEX [name] ON table(column)` and `DROP INDEX name ON table`; optional index names (auto-generated as `idx_{column}`); table-scoped names; explicit `INDEXED BY <name>` syntax for query acceleration (no automatic index selection); NULL values not indexed (multiple NULLs allowed in UNIQUE indexes per SQL standard)
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
 - **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `NOW()`, `VERSION()`, math functions (`ABS`, `ROUND`, `CEIL`/`CEILING`, `FLOOR`, `POWER`/`POW`, `SQRT`, `MOD`), and a registration pattern for adding more
@@ -168,6 +168,7 @@ SELECT * FROM <table> ORDER BY <col> LIMIT <n>;       -- sorted + limited
 SELECT <cols> FROM <t1> JOIN <t2> ON <condition>;            -- inner join
 SELECT <cols> FROM <t1> a INNER JOIN <t2> b ON a.id = b.fk;  -- with aliases
 SELECT <cols> FROM <t1> a, <t2> b WHERE a.id = b.fk;         -- implicit cross-join
+SELECT * FROM <table> INDEXED BY <index> WHERE <col> = <val>;  -- use named index
 SELECT * FROM <table> LIMIT <n>;             -- return at most n rows
 SELECT * FROM <table> OFFSET <n>;            -- skip first n rows
 SELECT * FROM <table> LIMIT <n> OFFSET <m>;  -- pagination
@@ -197,10 +198,12 @@ SELECT COUNT(*), SUM(<column>), AVG(<column>), MIN(<column>), MAX(<column>) FROM
 
 -- Update rows
 UPDATE <table> SET <column> = <value>, ... WHERE <condition>;
+UPDATE <table> INDEXED BY <index> SET <column> = <value> WHERE <col> = <val>;  -- use named index
 UPDATE <table> SET <column> = <value>;  -- all rows
 
 -- Delete rows
 DELETE FROM <table> WHERE <condition>;
+DELETE FROM <table> INDEXED BY <index> WHERE <col> = <val>;  -- use named index
 DELETE FROM <table>;  -- all rows
 
 -- Transaction control (accepted but no-op — every statement auto-commits)
@@ -650,7 +653,7 @@ SHOW TRACE;
 --  Table         | users
 --  Rows Scanned  | 1
 --  Rows Returned | 1
---  Used Index    | true
+--  Used Index    | PRIMARY
 ```
 
 For JOIN queries, the trace includes additional timing:

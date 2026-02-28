@@ -461,7 +461,7 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 	if !isCatalog && s.Where != nil {
 		if row, ok := e.tryPKLookup(s.Where, def); ok {
 			if tr != nil {
-				tr.UsedIndex = true
+				tr.IndexName = "PRIMARY"
 				tr.RowsScanned = 1
 			}
 			// Apply OFFSET/LIMIT to the single-row result.
@@ -487,80 +487,81 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		}
 	}
 
-	// Try secondary index lookup for simple equality on an indexed column.
-	if !isCatalog && s.Where != nil {
-		if rows, ok := e.trySecondaryLookup(s.Where, def); ok {
-			if tr != nil {
-				tr.UsedIndex = true
-				tr.RowsScanned = int64(len(rows))
-			}
-			var resultRows [][][]byte
-			var offset int64
-			if s.Offset != nil {
-				offset = *s.Offset
-			}
-			limit := int64(-1)
-			if s.Limit != nil {
-				limit = *s.Limit
-			}
+	// Explicit INDEXED BY: use named secondary index.
+	if !isCatalog && s.IndexedBy != "" {
+		rows, err := e.lookupByNamedIndex(s.IndexedBy, s.Where, def)
+		if err != nil {
+			return nil, err
+		}
+		if tr != nil {
+			tr.IndexName = s.IndexedBy
+			tr.RowsScanned = int64(len(rows))
+		}
+		var resultRows [][][]byte
+		var offset int64
+		if s.Offset != nil {
+			offset = *s.Offset
+		}
+		limit := int64(-1)
+		if s.Limit != nil {
+			limit = *s.Limit
+		}
 
-			// Optionally sort.
-			if len(orderKeys) > 0 {
-				sort.SliceStable(rows, func(i, j int) bool {
-					for _, ok := range orderKeys {
-						vi := storage.RowValue(rows[i].Values, ok.colIdx)
-						vj := storage.RowValue(rows[j].Values, ok.colIdx)
-						c := storage.CompareValues(vi, vj)
-						if c == -2 {
-							// NULLs sort last.
-							if vi == nil && vj == nil {
-								continue
-							}
-							if vi == nil {
-								return false
-							}
-							return true
-						}
-						if c == 0 {
+		// Optionally sort.
+		if len(orderKeys) > 0 {
+			sort.SliceStable(rows, func(i, j int) bool {
+				for _, ok := range orderKeys {
+					vi := storage.RowValue(rows[i].Values, ok.colIdx)
+					vj := storage.RowValue(rows[j].Values, ok.colIdx)
+					c := storage.CompareValues(vi, vj)
+					if c == -2 {
+						if vi == nil && vj == nil {
 							continue
 						}
-						if ok.desc {
-							return c > 0
+						if vi == nil {
+							return false
 						}
-						return c < 0
+						return true
 					}
-					return false
-				})
-			}
-
-			var skipped int64
-			for _, row := range rows {
-				if filter != nil && !filter(row) {
-					continue
+					if c == 0 {
+						continue
+					}
+					if ok.desc {
+						return c > 0
+					}
+					return c < 0
 				}
-				if skipped < offset {
-					skipped++
-					continue
-				}
-				if limit >= 0 && int64(len(resultRows)) >= limit {
-					break
-				}
-				textRow := make([][]byte, len(colEvals))
-				for i, eval := range colEvals {
-					textRow[i] = formatValue(eval(row))
-				}
-				resultRows = append(resultRows, textRow)
-			}
-			if tr != nil {
-				tr.RowsReturned = int64(len(resultRows))
-				tr.Exec = time.Since(execStart)
-			}
-			return &Result{
-				Columns: resultCols,
-				Rows:    resultRows,
-				Tag:     fmt.Sprintf("SELECT %d", len(resultRows)),
-			}, nil
+				return false
+			})
 		}
+
+		var skipped int64
+		for _, row := range rows {
+			if filter != nil && !filter(row) {
+				continue
+			}
+			if skipped < offset {
+				skipped++
+				continue
+			}
+			if limit >= 0 && int64(len(resultRows)) >= limit {
+				break
+			}
+			textRow := make([][]byte, len(colEvals))
+			for i, eval := range colEvals {
+				textRow[i] = formatValue(eval(row))
+			}
+			resultRows = append(resultRows, textRow)
+		}
+		if tr != nil {
+			tr.RowsReturned = int64(len(resultRows))
+			tr.Exec = time.Since(execStart)
+		}
+		return &Result{
+			Columns: resultCols,
+			Rows:    resultRows,
+			Tag:     fmt.Sprintf("SELECT %d", len(resultRows)),
+		}, nil
 	}
 
 	// Scan and filter rows.
@@ -1456,6 +1457,10 @@ func resolveJoinSelectColumns(exprs []parser.Expr, scope *joinScope) ([]exprFunc
 
 // execSelectJoin handles SELECT with JOIN clauses using nested-loop execution.
 func (e *Executor) execSelectJoin(s *parser.SelectStmt, tr *Trace) (*Result, error) {
+	if s.IndexedBy != "" {
+		return nil, &QueryError{Code: "0A000", Message: "INDEXED BY is not supported with JOIN"}
+	}
+
 	var planStart time.Time
 	if tr != nil {
 		planStart = time.Now()
@@ -1711,6 +1716,31 @@ func (e *Executor) execUpdate(s *parser.UpdateStmt, tr *Trace) (*Result, error) 
 		}
 	}
 
+	// If INDEXED BY is specified, wrap the filter to only consider rows from the index lookup.
+	if s.IndexedBy != "" {
+		rows, err := e.lookupByNamedIndex(s.IndexedBy, s.Where, def)
+		if err != nil {
+			return nil, err
+		}
+		if tr != nil {
+			tr.IndexName = s.IndexedBy
+		}
+		idSet := make(map[int64]struct{}, len(rows))
+		for _, r := range rows {
+			idSet[r.ID] = struct{}{}
+		}
+		baseFilter := filter
+		filter = func(r storage.Row) bool {
+			if _, ok := idSet[r.ID]; !ok {
+				return false
+			}
+			if baseFilter != nil {
+				return baseFilter(r)
+			}
+			return true
+		}
+	}
+
 	if tr != nil {
 		tr.Plan = time.Since(planStart)
 	}
@@ -1754,6 +1784,31 @@ func (e *Executor) execDelete(s *parser.DeleteStmt, tr *Trace) (*Result, error) 
 		filter, err = buildFilter(s.Where, def)
 		if err != nil {
 			return nil, WrapError(err)
+		}
+	}
+
+	// If INDEXED BY is specified, wrap the filter to only consider rows from the index lookup.
+	if s.IndexedBy != "" {
+		rows, err := e.lookupByNamedIndex(s.IndexedBy, s.Where, def)
+		if err != nil {
+			return nil, err
+		}
+		if tr != nil {
+			tr.IndexName = s.IndexedBy
+		}
+		idSet := make(map[int64]struct{}, len(rows))
+		for _, r := range rows {
+			idSet[r.ID] = struct{}{}
+		}
+		baseFilter := filter
+		filter = func(r storage.Row) bool {
+			if _, ok := idSet[r.ID]; !ok {
+				return false
+			}
+			if baseFilter != nil {
+				return baseFilter(r)
+			}
+			return true
 		}
 	}
 
@@ -2396,46 +2451,71 @@ func (e *Executor) tryPKLookup(where parser.Expr, def *storage.TableDef) (*stora
 	return row, true
 }
 
-// trySecondaryLookup checks if the WHERE expression is a simple "col = literal"
-// equality on an indexed column and if so, performs an indexed lookup.
-// Returns the matching rows and true if a secondary index was used.
-func (e *Executor) trySecondaryLookup(where parser.Expr, def *storage.TableDef) ([]storage.Row, bool) {
-	bin, ok := where.(*parser.BinaryExpr)
-	if !ok || bin.Op != "=" {
-		return nil, false
+// extractEqualityValue walks a WHERE tree (descending into AND nodes) to find
+// a simple equality predicate of the form col = literal for the given column name.
+// Returns the literal value, or nil if not found.
+func extractEqualityValue(expr parser.Expr, colName string) any {
+	if expr == nil {
+		return nil
 	}
+	switch e := expr.(type) {
+	case *parser.BinaryExpr:
+		if e.Op == "AND" {
+			if v := extractEqualityValue(e.Left, colName); v != nil {
+				return v
+			}
+			return extractEqualityValue(e.Right, colName)
+		}
+		if e.Op != "=" {
+			return nil
+		}
+		col, lit := extractColumnAndLiteral(e)
+		if col == nil || lit == nil {
+			return nil
+		}
+		if !strings.EqualFold(col.Name, colName) {
+			return nil
+		}
+		val, err := evalLiteral(lit)
+		if err != nil || val == nil {
+			return nil
+		}
+		return val
+	}
+	return nil
+}
 
-	colRef, lit := extractColumnAndLiteral(bin)
-	if colRef == nil || lit == nil {
-		return nil, false
-	}
-
-	// Find a secondary index on this column.
-	colOrd := columnIndex(def, colRef.Name)
-	if colOrd < 0 {
-		return nil, false
-	}
-	var idxName string
+// lookupByNamedIndex validates a named index exists and is applicable to the WHERE clause,
+// then performs the index lookup. Returns error if the index is not found or not applicable.
+func (e *Executor) lookupByNamedIndex(indexName string, where parser.Expr, def *storage.TableDef) ([]storage.Row, error) {
+	// Find the named index in the table definition.
+	var found bool
+	var idxColumn string
 	for _, idx := range def.Indexes {
-		if columnIndex(def, idx.Column) == colOrd {
-			idxName = idx.Name
+		if strings.EqualFold(idx.Name, indexName) {
+			found = true
+			idxColumn = idx.Column
 			break
 		}
 	}
-	if idxName == "" {
-		return nil, false
+	if !found {
+		return nil, &QueryError{Code: "42704", Message: fmt.Sprintf("index %q not found on table %q", indexName, def.Name)}
 	}
 
-	val, err := evalLiteral(lit)
-	if err != nil || val == nil {
-		return nil, false
+	if where == nil {
+		return nil, &QueryError{Code: "0A000", Message: fmt.Sprintf("INDEXED BY %q requires a WHERE clause with an equality predicate on column %q", indexName, idxColumn)}
 	}
 
-	rows, err := e.engine.LookupByIndex(def.Name, idxName, val)
+	val := extractEqualityValue(where, idxColumn)
+	if val == nil {
+		return nil, &QueryError{Code: "0A000", Message: fmt.Sprintf("INDEXED BY %q requires an equality predicate on column %q in WHERE clause", indexName, idxColumn)}
+	}
+
+	rows, err := e.engine.LookupByIndex(def.Name, indexName, val)
 	if err != nil {
-		return nil, false
+		return nil, WrapError(err)
 	}
-	return rows, true
+	return rows, nil
 }
 
 // extractColumnAndLiteral checks if a binary expression has a ColumnRef on one

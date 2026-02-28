@@ -88,11 +88,12 @@ type OrderByClause struct {
 	Desc   bool   // true = DESC, false = ASC (default)
 }
 
-// SelectStmt: SELECT <cols> FROM <table> [JOIN ...] [WHERE <expr>] [ORDER BY ...] [LIMIT n] [OFFSET n]
+// SelectStmt: SELECT <cols> FROM <table> [INDEXED BY <name>] [JOIN ...] [WHERE <expr>] [ORDER BY ...] [LIMIT n] [OFFSET n]
 type SelectStmt struct {
 	Columns   []Expr // StarExpr for *, ColumnRef for named columns
 	From      TableRef
 	FromAlias string          // "" when no alias
+	IndexedBy string          // "" when not specified
 	Joins     []JoinClause    // nil when no joins
 	Where     Expr            // nil when no WHERE clause
 	OrderBy   []OrderByClause // nil when no ORDER BY clause
@@ -100,17 +101,19 @@ type SelectStmt struct {
 	Offset    *int64          // nil = no offset
 }
 
-// UpdateStmt: UPDATE <table> SET <sets> [WHERE <expr>]
+// UpdateStmt: UPDATE <table> [INDEXED BY <name>] SET <sets> [WHERE <expr>]
 type UpdateStmt struct {
-	Table TableRef
-	Sets  []SetClause
-	Where Expr // nil when no WHERE clause
+	Table     TableRef
+	IndexedBy string // "" when not specified
+	Sets      []SetClause
+	Where     Expr // nil when no WHERE clause
 }
 
-// DeleteStmt: DELETE FROM <table> [WHERE <expr>]
+// DeleteStmt: DELETE FROM <table> [INDEXED BY <name>] [WHERE <expr>]
 type DeleteStmt struct {
-	Table TableRef
-	Where Expr // nil when no WHERE clause
+	Table     TableRef
+	IndexedBy string // "" when not specified
+	Where     Expr   // nil when no WHERE clause
 }
 
 // BeginStmt: BEGIN (no-op transaction start)

@@ -915,8 +915,8 @@ func TestExecuteTraced_SelectWithPKLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteTraced: %v", err)
 	}
-	if !tr.UsedIndex {
-		t.Error("expected UsedIndex = true for PK equality lookup")
+	if tr.IndexName != "PRIMARY" {
+		t.Errorf("expected IndexName = PRIMARY for PK equality lookup, got %q", tr.IndexName)
 	}
 	if tr.RowsScanned != 1 {
 		t.Errorf("RowsScanned = %d, want 1", tr.RowsScanned)
@@ -2939,8 +2939,8 @@ func TestExecutor_IndexQueryAcceleration(t *testing.T) {
 
 	exec(t, e, "CREATE INDEX idx_sku ON products(sku)")
 
-	// Query by indexed column.
-	r := exec(t, e, "SELECT name FROM products WHERE sku = 'SKU-42'")
+	// Query by indexed column with INDEXED BY.
+	r := exec(t, e, "SELECT name FROM products INDEXED BY idx_sku WHERE sku = 'SKU-42'")
 	if len(r.Rows) != 1 {
 		t.Fatalf("got %d rows, want 1", len(r.Rows))
 	}
@@ -2948,13 +2948,13 @@ func TestExecutor_IndexQueryAcceleration(t *testing.T) {
 		t.Errorf("name = %q, want Product 42", r.Rows[0][0])
 	}
 
-	// Verify tracing reports index usage.
-	result, tr, err := e.ExecuteTraced("SELECT name FROM products WHERE sku = 'SKU-42'")
+	// Verify tracing reports index name.
+	result, tr, err := e.ExecuteTraced("SELECT name FROM products INDEXED BY idx_sku WHERE sku = 'SKU-42'")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tr.UsedIndex {
-		t.Error("expected UsedIndex=true for indexed column lookup")
+	if tr.IndexName != "idx_sku" {
+		t.Errorf("expected IndexName=idx_sku, got %q", tr.IndexName)
 	}
 	if len(result.Rows) != 1 {
 		t.Fatalf("traced query got %d rows, want 1", len(result.Rows))
@@ -2971,8 +2971,8 @@ func TestExecutor_IndexWithNullValues(t *testing.T) {
 	// UNIQUE index should allow multiple NULLs (SQL standard).
 	exec(t, e, "CREATE UNIQUE INDEX idx_val ON t(val)")
 
-	// Query for a specific value should work.
-	r := exec(t, e, "SELECT id FROM t WHERE val = 'a'")
+	// Query for a specific value should work via INDEXED BY.
+	r := exec(t, e, "SELECT id FROM t INDEXED BY idx_val WHERE val = 'a'")
 	if len(r.Rows) != 1 {
 		t.Fatalf("got %d rows, want 1", len(r.Rows))
 	}
@@ -2996,7 +2996,7 @@ func TestExecutor_IndexSurvivesRestart(t *testing.T) {
 	exec(t, e1, "CREATE INDEX idx_val ON t(val)")
 	eng1.Close()
 
-	// Second session: reopen, verify index works.
+	// Second session: reopen, verify index works via INDEXED BY.
 	eng2, err := storage.Open(dir, false)
 	if err != nil {
 		t.Fatal(err)
@@ -3004,7 +3004,7 @@ func TestExecutor_IndexSurvivesRestart(t *testing.T) {
 	defer eng2.Close()
 	e2 := New(eng2)
 
-	r := exec(t, e2, "SELECT id FROM t WHERE val = 'hello'")
+	r := exec(t, e2, "SELECT id FROM t INDEXED BY idx_val WHERE val = 'hello'")
 	if len(r.Rows) != 1 {
 		t.Fatalf("got %d rows after restart, want 1", len(r.Rows))
 	}
@@ -3022,8 +3022,8 @@ func TestExecutor_NonUniqueIndex(t *testing.T) {
 
 	exec(t, e, "CREATE INDEX idx_status ON orders(status)")
 
-	// Non-unique index should return multiple rows.
-	r := exec(t, e, "SELECT id FROM orders WHERE status = 'pending' ORDER BY id")
+	// Non-unique index should return multiple rows via INDEXED BY.
+	r := exec(t, e, "SELECT id FROM orders INDEXED BY idx_status WHERE status = 'pending' ORDER BY id")
 	if len(r.Rows) != 2 {
 		t.Fatalf("got %d rows, want 2", len(r.Rows))
 	}
@@ -3115,6 +3115,149 @@ func TestExecutor_NotNull_AlterTableReject(t *testing.T) {
 	_, err := e.Execute("ALTER TABLE t ADD COLUMN name TEXT NOT NULL")
 	if err == nil {
 		t.Fatal("expected error for ALTER TABLE ADD COLUMN ... NOT NULL")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// INDEXED BY
+// ---------------------------------------------------------------------------
+
+func TestExecutor_IndexedBy_NotFound(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT)")
+
+	_, err := e.Execute("SELECT * FROM t INDEXED BY nonexistent WHERE email = 'a@b.com'")
+	assertSQLSTATE(t, err, "42704")
+}
+
+func TestExecutor_IndexedBy_NotApplicable(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT, name TEXT)")
+	exec(t, e, "CREATE INDEX idx_email ON t(email)")
+
+	// WHERE clause is on a different column than the indexed one.
+	_, err := e.Execute("SELECT * FROM t INDEXED BY idx_email WHERE name = 'Alice'")
+	assertSQLSTATE(t, err, "0A000")
+}
+
+func TestExecutor_IndexedBy_NoWhere(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT)")
+	exec(t, e, "CREATE INDEX idx_email ON t(email)")
+
+	_, err := e.Execute("SELECT * FROM t INDEXED BY idx_email")
+	assertSQLSTATE(t, err, "0A000")
+}
+
+func TestExecutor_IndexedBy_CompoundAnd(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT, active BOOLEAN)")
+	exec(t, e, "CREATE INDEX idx_email ON t(email)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a@b.com', true)")
+	exec(t, e, "INSERT INTO t VALUES (2, 'a@b.com', false)")
+	exec(t, e, "INSERT INTO t VALUES (3, 'c@d.com', true)")
+
+	// Compound WHERE with AND: index on email, additional filter on active.
+	r := exec(t, e, "SELECT id FROM t INDEXED BY idx_email WHERE email = 'a@b.com' AND active = true")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1" {
+		t.Errorf("id = %q, want 1", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_IndexedBy_Update(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT, name TEXT)")
+	exec(t, e, "CREATE INDEX idx_email ON t(email)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a@b.com', 'Alice')")
+	exec(t, e, "INSERT INTO t VALUES (2, 'c@d.com', 'Bob')")
+
+	r := exec(t, e, "UPDATE t INDEXED BY idx_email SET name = 'Updated' WHERE email = 'a@b.com'")
+	if r.Tag != "UPDATE 1" {
+		t.Errorf("tag = %q, want UPDATE 1", r.Tag)
+	}
+
+	// Verify the update took effect.
+	r2 := exec(t, e, "SELECT name FROM t WHERE id = 1")
+	if string(r2.Rows[0][0]) != "Updated" {
+		t.Errorf("name = %q, want Updated", r2.Rows[0][0])
+	}
+}
+
+func TestExecutor_IndexedBy_Delete(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT)")
+	exec(t, e, "CREATE INDEX idx_email ON t(email)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a@b.com')")
+	exec(t, e, "INSERT INTO t VALUES (2, 'c@d.com')")
+
+	r := exec(t, e, "DELETE FROM t INDEXED BY idx_email WHERE email = 'a@b.com'")
+	if r.Tag != "DELETE 1" {
+		t.Errorf("tag = %q, want DELETE 1", r.Tag)
+	}
+
+	// Verify the delete took effect.
+	r2 := exec(t, e, "SELECT COUNT(*) FROM t")
+	if string(r2.Rows[0][0]) != "1" {
+		t.Errorf("count = %q, want 1", r2.Rows[0][0])
+	}
+}
+
+func TestExecutor_IndexedBy_JoinRejected(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t1 (id INTEGER PRIMARY KEY, val TEXT)")
+	exec(t, e, "CREATE TABLE t2 (id INTEGER PRIMARY KEY, t1_id INTEGER)")
+	exec(t, e, "CREATE INDEX idx_val ON t1(val)")
+
+	_, err := e.Execute("SELECT * FROM t1 INDEXED BY idx_val JOIN t2 ON t1.id = t2.t1_id WHERE t1.val = 'x'")
+	assertSQLSTATE(t, err, "0A000")
+}
+
+func TestExecutor_IndexedBy_NoAutoSecondaryIndex(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT)")
+	exec(t, e, "CREATE INDEX idx_email ON t(email)")
+	for i := 1; i <= 50; i++ {
+		exec(t, e, "INSERT INTO t VALUES ("+itoa(i)+", 'user"+itoa(i)+"@test.com')")
+	}
+
+	// Without INDEXED BY, a query on an indexed column should do a full scan.
+	_, tr, err := e.ExecuteTraced("SELECT * FROM t WHERE email = 'user25@test.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.IndexName != "" {
+		t.Errorf("expected no index used without INDEXED BY, got IndexName=%q", tr.IndexName)
+	}
+	if tr.RowsScanned < 50 {
+		t.Errorf("expected full scan (>=50 rows), got RowsScanned=%d", tr.RowsScanned)
+	}
+}
+
+func TestExecutor_IndexedBy_TraceShowsIndexName(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT)")
+	exec(t, e, "CREATE INDEX idx_email ON t(email)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'a@b.com')")
+
+	// PK lookup trace.
+	_, tr, err := e.ExecuteTraced("SELECT * FROM t WHERE id = 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.IndexName != "PRIMARY" {
+		t.Errorf("PK trace: IndexName = %q, want PRIMARY", tr.IndexName)
+	}
+
+	// Secondary index trace.
+	_, tr2, err := e.ExecuteTraced("SELECT * FROM t INDEXED BY idx_email WHERE email = 'a@b.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr2.IndexName != "idx_email" {
+		t.Errorf("secondary trace: IndexName = %q, want idx_email", tr2.IndexName)
 	}
 }
 

@@ -239,7 +239,7 @@ Secondary indexes are created via `CREATE [UNIQUE] INDEX [name] ON table(column)
 
 **Write path maintenance.** Insert, Update, and Delete all maintain secondary indexes alongside primary key indexes. For unique secondary indexes, constraint violations trigger rollback of earlier index changes within the same operation, keeping the index consistent even on failure.
 
-**Query acceleration.** The executor detects `WHERE col = literal` patterns on indexed columns and uses `LookupByIndex` instead of a full table scan — the same pattern as PK lookups but extended to secondary indexes.
+**Query acceleration.** Secondary indexes are only used when explicitly requested via `INDEXED BY <name>` in the query (e.g. `SELECT * FROM t INDEXED BY idx_email WHERE email = 'foo@bar.com'`). There is no automatic index selection — the user has full control over when indexes are used. The `INDEXED BY` clause requires a WHERE clause containing an equality predicate on the indexed column; if the index doesn't exist or the WHERE clause doesn't match, the query fails with a clear error. Primary key lookups remain implicit (they're structural, not optional). `INDEXED BY` works with SELECT, UPDATE, and DELETE but is not supported with JOINs.
 
 ### Pre-Validation Before WAL
 

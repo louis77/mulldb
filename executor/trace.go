@@ -16,7 +16,7 @@ type Trace struct {
 	JoinLoop     time.Duration // nested-loop join (zero when no JOIN)
 	RowsScanned  int64
 	RowsReturned int64
-	UsedIndex    bool
+	IndexName    string // non-empty when an index was used (e.g. "PRIMARY", "idx_email")
 	Table        string
 	StmtType     string // "SELECT", "INSERT", etc.
 }
@@ -66,8 +66,8 @@ func TraceToResult(tr *Trace) *Result {
 	rows = append(rows, [][]byte{[]byte("Rows Scanned"), []byte(fmt.Sprintf("%d", tr.RowsScanned))})
 	rows = append(rows, [][]byte{[]byte("Rows Returned"), []byte(fmt.Sprintf("%d", tr.RowsReturned))})
 
-	if tr.UsedIndex {
-		rows = append(rows, [][]byte{[]byte("Used Index"), []byte("true")})
+	if tr.IndexName != "" {
+		rows = append(rows, [][]byte{[]byte("Used Index"), []byte(tr.IndexName)})
 	}
 
 	return &Result{

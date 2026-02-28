@@ -88,6 +88,7 @@ const (
 	TokenDoubleKW    // DOUBLE (first word of DOUBLE PRECISION)
 	TokenIndex       // INDEX
 	TokenUnique      // UNIQUE
+	TokenIndexed     // INDEXED
 )
 
 var tokenNames = map[TokenType]string{
@@ -164,6 +165,7 @@ var tokenNames = map[TokenType]string{
 	TokenDoubleKW:    "DOUBLE",
 	TokenIndex:       "INDEX",
 	TokenUnique:      "UNIQUE",
+	TokenIndexed:     "INDEXED",
 }
 
 func (t TokenType) String() string {
@@ -237,6 +239,7 @@ var keywords = map[string]TokenType{
 	"DOUBLE":      TokenDoubleKW,
 	"INDEX":       TokenIndex,
 	"UNIQUE":      TokenUnique,
+	"INDEXED":     TokenIndexed,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

@@ -2102,3 +2102,65 @@ func TestParse_NotExprWithIn(t *testing.T) {
 		t.Error("InExpr.Not = true, want false (NOT is outer)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// INDEXED BY
+// ---------------------------------------------------------------------------
+
+func TestParse_SelectIndexedBy(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM users INDEXED BY idx_email WHERE email = 'a@b.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.IndexedBy != "idx_email" {
+		t.Errorf("IndexedBy = %q, want idx_email", sel.IndexedBy)
+	}
+}
+
+func TestParse_SelectIndexedByWithAlias(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM users u INDEXED BY idx_email WHERE email = 'a@b.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.FromAlias != "u" {
+		t.Errorf("FromAlias = %q, want u", sel.FromAlias)
+	}
+	if sel.IndexedBy != "idx_email" {
+		t.Errorf("IndexedBy = %q, want idx_email", sel.IndexedBy)
+	}
+}
+
+func TestParse_SelectWithoutIndexedBy(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM users WHERE email = 'a@b.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.IndexedBy != "" {
+		t.Errorf("IndexedBy = %q, want empty", sel.IndexedBy)
+	}
+}
+
+func TestParse_UpdateIndexedBy(t *testing.T) {
+	stmt, err := Parse("UPDATE users INDEXED BY idx_email SET name = 'x' WHERE email = 'a@b.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upd := stmt.(*UpdateStmt)
+	if upd.IndexedBy != "idx_email" {
+		t.Errorf("IndexedBy = %q, want idx_email", upd.IndexedBy)
+	}
+}
+
+func TestParse_DeleteIndexedBy(t *testing.T) {
+	stmt, err := Parse("DELETE FROM users INDEXED BY idx_email WHERE email = 'a@b.com'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	del := stmt.(*DeleteStmt)
+	if del.IndexedBy != "idx_email" {
+		t.Errorf("IndexedBy = %q, want idx_email", del.IndexedBy)
+	}
+}

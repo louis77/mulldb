@@ -460,6 +460,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 
 	var from TableRef
 	var fromAlias string
+	var indexedBy string
 	var joins []JoinClause
 	var err error
 	if p.cur.Type == TokenFrom {
@@ -472,6 +473,11 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		if p.cur.Type == TokenIdent && !isSelectClauseKeyword(p.cur.Literal) {
 			fromAlias = p.cur.Literal
 			p.next()
+		}
+		// Optional INDEXED BY <name>.
+		indexedBy, err = p.parseOptionalIndexedBy()
+		if err != nil {
+			return nil, err
 		}
 		// Parse implicit cross-joins: FROM t1 a, t2 b, ...
 		for p.cur.Type == TokenComma {
@@ -597,6 +603,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		Columns:   columns,
 		From:      from,
 		FromAlias: fromAlias,
+		IndexedBy: indexedBy,
 		Joins:     joins,
 		Where:     where,
 		OrderBy:   orderBy,
@@ -610,15 +617,37 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 func isSelectClauseKeyword(ident string) bool {
 	switch strings.ToUpper(ident) {
 	case "WHERE", "ORDER", "LIMIT", "OFFSET", "JOIN", "INNER", "ON",
-		"LEFT", "RIGHT", "OUTER", "CROSS", "FULL", "GROUP", "HAVING":
+		"LEFT", "RIGHT", "OUTER", "CROSS", "FULL", "GROUP", "HAVING",
+		"INDEXED":
 		return true
 	}
 	return false
 }
 
+// parseOptionalIndexedBy parses an optional INDEXED BY <name> clause.
+// Returns the index name or "" if not present.
+func (p *parser) parseOptionalIndexedBy() (string, error) {
+	if p.cur.Type != TokenIndexed {
+		return "", nil
+	}
+	p.next() // consume INDEXED
+	if _, err := p.expect(TokenBy); err != nil {
+		return "", err
+	}
+	tok, err := p.expect(TokenIdent)
+	if err != nil {
+		return "", err
+	}
+	return tok.Literal, nil
+}
+
 func (p *parser) parseUpdate() (*UpdateStmt, error) {
 	p.next() // skip UPDATE
 	ref, err := p.parseTableRef()
+	if err != nil {
+		return nil, err
+	}
+	indexedBy, err := p.parseOptionalIndexedBy()
 	if err != nil {
 		return nil, err
 	}
@@ -655,7 +684,7 @@ func (p *parser) parseUpdate() (*UpdateStmt, error) {
 		}
 	}
 
-	return &UpdateStmt{Table: ref, Sets: sets, Where: where}, nil
+	return &UpdateStmt{Table: ref, IndexedBy: indexedBy, Sets: sets, Where: where}, nil
 }
 
 func (p *parser) parseDelete() (*DeleteStmt, error) {
@@ -664,6 +693,10 @@ func (p *parser) parseDelete() (*DeleteStmt, error) {
 		return nil, err
 	}
 	ref, err := p.parseTableRef()
+	if err != nil {
+		return nil, err
+	}
+	indexedBy, err := p.parseOptionalIndexedBy()
 	if err != nil {
 		return nil, err
 	}
@@ -677,7 +710,7 @@ func (p *parser) parseDelete() (*DeleteStmt, error) {
 		}
 	}
 
-	return &DeleteStmt{Table: ref, Where: where}, nil
+	return &DeleteStmt{Table: ref, IndexedBy: indexedBy, Where: where}, nil
 }
 
 // -------------------------------------------------------------------------
