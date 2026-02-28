@@ -186,5 +186,6 @@ type Engine interface {
 	CreateIndex(table string, idx IndexDef) error
 	DropIndex(table string, indexName string) error
 	LookupByIndex(table string, indexName string, value any) ([]Row, error)
+	RowCount(table string) (int64, error)
 	Close() error
 }

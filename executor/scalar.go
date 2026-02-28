@@ -37,6 +37,97 @@ func coerceToText(v any) (string, bool) {
 // Returns the result value and its column descriptor.
 type ScalarFunc func(args []any) (any, Column, error)
 
+// castValue coerces a Go value to the target SQL type name.
+// Returns nil for nil input. Returns the value unchanged if already the right type.
+func castValue(v any, typeName string) any {
+	if v == nil {
+		return nil
+	}
+	switch typeName {
+	case "INTEGER":
+		switch x := v.(type) {
+		case int64:
+			return x
+		case float64:
+			return int64(x)
+		case bool:
+			if x {
+				return int64(1)
+			}
+			return int64(0)
+		case string:
+			n, err := strconv.ParseInt(x, 10, 64)
+			if err != nil {
+				return nil
+			}
+			return n
+		}
+	case "TEXT":
+		s, ok := coerceToText(v)
+		if ok {
+			return s
+		}
+	case "BOOLEAN":
+		switch x := v.(type) {
+		case bool:
+			return x
+		case int64:
+			return x != 0
+		case string:
+			switch strings.ToLower(x) {
+			case "true", "t", "yes", "on", "1":
+				return true
+			case "false", "f", "no", "off", "0":
+				return false
+			}
+		}
+	case "FLOAT":
+		switch x := v.(type) {
+		case float64:
+			return x
+		case int64:
+			return float64(x)
+		case string:
+			f, err := strconv.ParseFloat(x, 64)
+			if err != nil {
+				return nil
+			}
+			return f
+		}
+	}
+	return v
+}
+
+func castTypeOID(typeName string) int32 {
+	switch typeName {
+	case "INTEGER":
+		return OIDInt8
+	case "TEXT":
+		return OIDText
+	case "BOOLEAN":
+		return OIDBool
+	case "FLOAT":
+		return OIDFloat8
+	case "TIMESTAMP":
+		return OIDTimestampTZ
+	default:
+		return OIDUnknown
+	}
+}
+
+func castTypeSize(typeName string) int16 {
+	switch typeName {
+	case "INTEGER":
+		return 8
+	case "BOOLEAN":
+		return 1
+	case "FLOAT":
+		return 8
+	default:
+		return -1
+	}
+}
+
 var scalarRegistry = map[string]ScalarFunc{}
 
 // RegisterScalar registers a scalar function by name (case-insensitive).
@@ -63,6 +154,15 @@ func evalStaticExpr(expr parser.Expr) (any, Column, error) {
 		return evalStaticBinaryExpr(e)
 	case *parser.UnaryExpr:
 		return evalStaticUnaryExpr(e)
+	case *parser.CastExpr:
+		val, col, err := evalStaticExpr(e.Expr)
+		if err != nil {
+			return nil, Column{}, err
+		}
+		val = castValue(val, e.TypeName)
+		col.TypeOID = castTypeOID(e.TypeName)
+		col.TypeSize = castTypeSize(e.TypeName)
+		return val, col, nil
 	default:
 		return nil, Column{}, &QueryError{
 			Code:    "42601",

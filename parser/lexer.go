@@ -91,6 +91,14 @@ func (l *Lexer) NextToken() Token {
 		}
 		l.advance()
 		return Token{Type: TokenIllegal, Literal: "|", Pos: start}
+	case l.ch == ':':
+		if l.peek() == ':' {
+			l.advance()
+			l.advance()
+			return Token{Type: TokenCast, Literal: "::", Pos: start}
+		}
+		l.advance()
+		return Token{Type: TokenIllegal, Literal: ":", Pos: start}
 	case l.ch == '=':
 		l.advance()
 		return Token{Type: TokenEq, Literal: "=", Pos: start}

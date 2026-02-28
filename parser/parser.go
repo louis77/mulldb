@@ -889,7 +889,60 @@ func (p *parser) parseUnary() (Expr, error) {
 		}
 		return &UnaryExpr{Op: "-", Expr: expr}, nil
 	}
-	return p.parsePrimary()
+	return p.parsePostfix()
+}
+
+// parsePostfix handles the PostgreSQL :: cast operator, which binds
+// tighter than any other operator.
+func (p *parser) parsePostfix() (Expr, error) {
+	expr, err := p.parsePrimary()
+	if err != nil {
+		return nil, err
+	}
+	for p.cur.Type == TokenCast {
+		p.next() // consume ::
+		typeName, err := p.parseCastType()
+		if err != nil {
+			return nil, err
+		}
+		expr = &CastExpr{Expr: expr, TypeName: typeName}
+	}
+	return expr, nil
+}
+
+// parseCastType parses the target type name after ::.
+func (p *parser) parseCastType() (string, error) {
+	switch p.cur.Type {
+	case TokenIntegerKW:
+		p.next()
+		return "INTEGER", nil
+	case TokenTextKW:
+		p.next()
+		return "TEXT", nil
+	case TokenBooleanKW:
+		p.next()
+		return "BOOLEAN", nil
+	case TokenFloatKW:
+		p.next()
+		return "FLOAT", nil
+	case TokenTimestampKW:
+		p.next()
+		return "TIMESTAMP", nil
+	case TokenDoubleKW:
+		p.next()
+		if p.cur.Type != TokenIdent || !strings.EqualFold(p.cur.Literal, "PRECISION") {
+			return "", fmt.Errorf("expected PRECISION after DOUBLE at position %d", p.cur.Pos)
+		}
+		p.next()
+		return "FLOAT", nil
+	case TokenIdent:
+		// Accept common PostgreSQL type aliases that aren't keywords.
+		name := strings.ToUpper(p.cur.Literal)
+		p.next()
+		return name, nil
+	default:
+		return "", fmt.Errorf("expected type name after :: at position %d", p.cur.Pos)
+	}
 }
 
 func (p *parser) parsePrimary() (Expr, error) {

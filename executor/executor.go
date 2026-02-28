@@ -1159,6 +1159,14 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 			return compileJoinExpr(expr, scope)
 		})
 
+	case *parser.CastExpr:
+		inner, err := compileJoinExpr(e.Expr, scope)
+		if err != nil {
+			return nil, err
+		}
+		typeName := e.TypeName
+		return func(r storage.Row) any { return castValue(inner(r), typeName) }, nil
+
 	case *parser.FunctionCallExpr:
 		fn, ok := scalarRegistry[e.Name]
 		if !ok {
@@ -1415,6 +1423,17 @@ func resolveJoinSelectColumns(exprs []parser.Expr, scope *joinScope) ([]exprFunc
 			} else {
 				cols = append(cols, Column{Name: name, TypeOID: OIDInt8, TypeSize: 8})
 			}
+		case *parser.CastExpr:
+			compiled, err := compileJoinExpr(inner, scope)
+			if err != nil {
+				return nil, nil, err
+			}
+			evals = append(evals, compiled)
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: castTypeOID(e.TypeName), TypeSize: castTypeSize(e.TypeName)})
 		default:
 			compiled, err := compileJoinExpr(inner, scope)
 			if err != nil {
@@ -1871,6 +1890,17 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 			} else {
 				cols = append(cols, Column{Name: name, TypeOID: OIDInt8, TypeSize: 8})
 			}
+		case *parser.CastExpr:
+			compiled, err := compileExpr(e, def)
+			if err != nil {
+				return nil, nil, err
+			}
+			evals = append(evals, compiled)
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: castTypeOID(e.TypeName), TypeSize: castTypeSize(e.TypeName)})
 		default:
 			compiled, err := compileExpr(inner, def)
 			if err != nil {
@@ -1990,6 +2020,14 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 		return compileInExpr(e, func(expr parser.Expr) (exprFunc, error) {
 			return compileExpr(expr, def)
 		})
+
+	case *parser.CastExpr:
+		inner, err := compileExpr(e.Expr, def)
+		if err != nil {
+			return nil, err
+		}
+		typeName := e.TypeName
+		return func(r storage.Row) any { return castValue(inner(r), typeName) }, nil
 
 	case *parser.FunctionCallExpr:
 		fn, ok := scalarRegistry[e.Name]
@@ -2447,6 +2485,12 @@ func evalLiteral(expr parser.Expr) (any, error) {
 	case *parser.FunctionCallExpr:
 		val, _, err := evalScalarFunction(e)
 		return val, err
+	case *parser.CastExpr:
+		val, err := evalLiteral(e.Expr)
+		if err != nil {
+			return nil, err
+		}
+		return castValue(val, e.TypeName), nil
 	default:
 		return nil, fmt.Errorf("expected literal value, got %T", expr)
 	}

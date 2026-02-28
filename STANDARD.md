@@ -246,7 +246,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | F051-02 | TIME data type with fractional seconds precision | Open |
 | F051-03 | TIMESTAMP data type with fractional seconds precision | **Done** (TIMESTAMP, TIMESTAMPTZ, TIMESTAMP WITH TIME ZONE; UTC-only; microsecond precision; stored as int64 µs since epoch) |
 | F051-04 | Comparison predicate on DATE, TIME, and TIMESTAMP | **Partial** (TIMESTAMP comparisons work; DATE and TIME not implemented) |
-| F051-05 | Explicit CAST between datetime types and character string types | **Partial** (implicit string→timestamp coercion on INSERT/UPDATE and in WHERE comparisons; no explicit CAST) |
+| F051-05 | Explicit CAST between datetime types and character string types | **Partial** (implicit string→timestamp coercion on INSERT/UPDATE and in WHERE comparisons; `expr::TIMESTAMP` cast syntax supported; no SQL-standard `CAST()` syntax) |
 | F051-06 | CURRENT_DATE | Open |
 | F051-07 | LOCALTIME | Open |
 | F051-08 | LOCALTIMESTAMP | Open |
@@ -277,7 +277,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| F201 | CAST function | Open |
+| F201 | CAST function | **Partial** (PostgreSQL-style `expr::type` syntax; supports INTEGER, TEXT, BOOLEAN, FLOAT, TIMESTAMP targets; no SQL-standard `CAST(expr AS type)` syntax yet) |
 
 ## F221 — Explicit defaults
 
@@ -365,7 +365,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 ### Biggest gaps to close
 1. **Predicates**: BETWEEN, IN
-2. **Expressions**: CASE, CAST, COALESCE (arithmetic is done)
+2. **Expressions**: CASE, COALESCE (arithmetic and `::` cast are done; SQL-standard `CAST(expr AS type)` not yet)
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet
 5. **Transactions**: No BEGIN / COMMIT / ROLLBACK

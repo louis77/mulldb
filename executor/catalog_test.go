@@ -432,6 +432,71 @@ func TestCatalog_TablePlusConstraintQuery(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// pg_class
+// ---------------------------------------------------------------------------
+
+func TestCatalog_PGClassUserTables(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE names (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO names (id, name) VALUES (1, 'Alice')")
+	exec(t, e, "INSERT INTO names (id, name) VALUES (2, 'Bob')")
+
+	r := exec(t, e, "SELECT relname, relkind, reltuples FROM pg_class WHERE relname = 'names'")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "names" {
+		t.Errorf("relname = %q, want names", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "r" {
+		t.Errorf("relkind = %q, want r", r.Rows[0][1])
+	}
+	if string(r.Rows[0][2]) != "2" {
+		t.Errorf("reltuples = %q, want 2", r.Rows[0][2])
+	}
+}
+
+func TestCatalog_PGClassJoinNamespace(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE names (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "INSERT INTO names (id, name) VALUES (1, 'Alice')")
+	exec(t, e, "INSERT INTO names (id, name) VALUES (2, 'Bob')")
+	exec(t, e, "INSERT INTO names (id, name) VALUES (3, 'Charlie')")
+
+	r := exec(t, e, `SELECT reltuples::int8 AS count
+		FROM pg_class c
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE nspname = 'public' AND relname = 'names'`)
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("count = %q, want 3", r.Rows[0][0])
+	}
+	if r.Columns[0].Name != "count" {
+		t.Errorf("column name = %q, want count", r.Columns[0].Name)
+	}
+}
+
+func TestCatalog_PGClassCatalogTables(t *testing.T) {
+	e := setup(t)
+
+	r := exec(t, e, "SELECT relname, relkind FROM pg_class WHERE relkind = 'v' ORDER BY relname")
+
+	if len(r.Rows) == 0 {
+		t.Fatal("expected catalog tables in pg_class")
+	}
+	// All should have relkind = 'v'.
+	for i, row := range r.Rows {
+		if string(row[1]) != "v" {
+			t.Errorf("row %d relkind = %q, want v", i, row[1])
+		}
+	}
+}
+
 func TestCatalog_InformationSchemaInsertReadOnly(t *testing.T) {
 	e := setup(t)
 	_, err := e.Execute("INSERT INTO information_schema.tables (table_schema, table_name, table_type) VALUES ('public', 'fake', 'BASE TABLE')")
