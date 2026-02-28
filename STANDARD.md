@@ -208,7 +208,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | F021-01 | COLUMNS view | **Done** (information_schema.columns) |
 | F021-02 | TABLES view | **Done** (information_schema.tables) |
 | F021-03 | VIEWS view | Open |
-| F021-04 | TABLE_CONSTRAINTS view | Open |
+| F021-04 | TABLE_CONSTRAINTS view | **Done** (information_schema.table_constraints; also key_column_usage) |
 | F021-05 | REFERENTIAL_CONSTRAINTS view | Open |
 | F021-06 | CHECK_CONSTRAINTS view | Open |
 

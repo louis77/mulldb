@@ -1566,6 +1566,85 @@ func TestParse_MultiJoin(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Implicit cross-join (FROM t1, t2)
+// ---------------------------------------------------------------------------
+
+func TestParse_ImplicitCrossJoin(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t1 a, t2 b WHERE a.id = b.id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From.Name != "t1" {
+		t.Errorf("from = %q, want t1", sel.From.Name)
+	}
+	if sel.FromAlias != "a" {
+		t.Errorf("from alias = %q, want a", sel.FromAlias)
+	}
+	if len(sel.Joins) != 1 {
+		t.Fatalf("joins = %d, want 1", len(sel.Joins))
+	}
+	if sel.Joins[0].Table.Name != "t2" {
+		t.Errorf("join table = %q, want t2", sel.Joins[0].Table.Name)
+	}
+	if sel.Joins[0].Alias != "b" {
+		t.Errorf("join alias = %q, want b", sel.Joins[0].Alias)
+	}
+	if sel.Joins[0].On != nil {
+		t.Error("cross-join On should be nil")
+	}
+	if sel.Where == nil {
+		t.Fatal("where should not be nil")
+	}
+}
+
+func TestParse_ImplicitCrossJoinSchemaQualified(t *testing.T) {
+	stmt, err := Parse("SELECT tc.constraint_name FROM information_schema.table_constraints tc, information_schema.key_column_usage kc WHERE tc.table_name = kc.table_name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From.Schema != "information_schema" || sel.From.Name != "table_constraints" {
+		t.Errorf("from = %s.%s, want information_schema.table_constraints", sel.From.Schema, sel.From.Name)
+	}
+	if sel.FromAlias != "tc" {
+		t.Errorf("from alias = %q, want tc", sel.FromAlias)
+	}
+	if len(sel.Joins) != 1 {
+		t.Fatalf("joins = %d, want 1", len(sel.Joins))
+	}
+	if sel.Joins[0].Table.Schema != "information_schema" || sel.Joins[0].Table.Name != "key_column_usage" {
+		t.Errorf("join table = %s.%s, want information_schema.key_column_usage", sel.Joins[0].Table.Schema, sel.Joins[0].Table.Name)
+	}
+	if sel.Joins[0].Alias != "kc" {
+		t.Errorf("join alias = %q, want kc", sel.Joins[0].Alias)
+	}
+	if sel.Joins[0].On != nil {
+		t.Error("cross-join On should be nil")
+	}
+}
+
+func TestParse_ImplicitCrossJoinMultiple(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t1 a, t2 b, t3 c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if sel.From.Name != "t1" {
+		t.Errorf("from = %q, want t1", sel.From.Name)
+	}
+	if len(sel.Joins) != 2 {
+		t.Fatalf("joins = %d, want 2", len(sel.Joins))
+	}
+	if sel.Joins[0].Table.Name != "t2" || sel.Joins[0].Alias != "b" {
+		t.Errorf("join[0] = %s (%s), want t2 (b)", sel.Joins[0].Table.Name, sel.Joins[0].Alias)
+	}
+	if sel.Joins[1].Table.Name != "t3" || sel.Joins[1].Alias != "c" {
+		t.Errorf("join[1] = %s (%s), want t3 (c)", sel.Joins[1].Table.Name, sel.Joins[1].Alias)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Concatenation operator ||
 // ---------------------------------------------------------------------------
 

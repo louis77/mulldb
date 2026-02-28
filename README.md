@@ -163,6 +163,7 @@ SELECT * FROM <table> ORDER BY <col> [ASC|DESC], ...;  -- sorted results
 SELECT * FROM <table> ORDER BY <col> LIMIT <n>;       -- sorted + limited
 SELECT <cols> FROM <t1> JOIN <t2> ON <condition>;            -- inner join
 SELECT <cols> FROM <t1> a INNER JOIN <t2> b ON a.id = b.fk;  -- with aliases
+SELECT <cols> FROM <t1> a, <t2> b WHERE a.id = b.fk;         -- implicit cross-join
 SELECT * FROM <table> LIMIT <n>;             -- return at most n rows
 SELECT * FROM <table> OFFSET <n>;            -- skip first n rows
 SELECT * FROM <table> LIMIT <n> OFFSET <m>;  -- pagination
@@ -356,6 +357,8 @@ SELECT * FROM scores ORDER BY score LIMIT 2 OFFSET 1;
 Unqualified column names work if the column name is unique across all joined tables. If it appears in multiple tables, qualify it with the table name or alias.
 
 Multiple joins can be chained: `FROM t1 JOIN t2 ON ... JOIN t3 ON ...`
+
+Implicit cross-joins are also supported via comma-separated tables in the `FROM` clause: `FROM t1 a, t2 b WHERE a.id = b.id`. This is equivalent to a cross-join filtered by the `WHERE` clause.
 
 **Examples:**
 
@@ -574,6 +577,8 @@ Tables can be accessed with or without schema qualification. Unqualified names c
 | `pg_namespace` / `pg_catalog.pg_namespace` | `oid` (INTEGER), `nspname` (TEXT) | Schema/namespace information (`pg_catalog`, `public`, `information_schema`) |
 | `information_schema.tables` | `table_schema` (TEXT), `table_name` (TEXT), `table_type` (TEXT) | Lists all user tables and system catalog tables |
 | `information_schema.columns` | `table_schema` (TEXT), `table_name` (TEXT), `column_name` (TEXT), `ordinal_position` (INTEGER), `data_type` (TEXT), `is_nullable` (TEXT) | Column metadata for all tables |
+| `information_schema.table_constraints` | `constraint_catalog` (TEXT), `constraint_schema` (TEXT), `constraint_name` (TEXT), `table_catalog` (TEXT), `table_schema` (TEXT), `table_name` (TEXT), `constraint_type` (TEXT), `is_deferrable` (TEXT), `initially_deferred` (TEXT) | PRIMARY KEY and UNIQUE constraints |
+| `information_schema.key_column_usage` | `constraint_catalog` (TEXT), `constraint_schema` (TEXT), `constraint_name` (TEXT), `table_catalog` (TEXT), `table_schema` (TEXT), `table_name` (TEXT), `column_name` (TEXT), `ordinal_position` (INTEGER) | Columns participating in constraints |
 
 **Examples:**
 
@@ -912,7 +917,7 @@ go test -race ./...
 ```
 
 The test suite covers:
-- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, LIKE / NOT LIKE / ILIKE / NOT ILIKE with ESCAPE, IN / NOT IN, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, INNER JOIN (with aliases, qualified columns, multi-join), optional FROM clause, UTF-8 identifiers and string literals, SQL comments (`--` and `/* */` with nesting), error cases
+- **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, LIKE / NOT LIKE / ILIKE / NOT ILIKE with ESCAPE, IN / NOT IN, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, INNER JOIN (with aliases, qualified columns, multi-join), implicit cross-join (comma-separated FROM), optional FROM clause, UTF-8 identifiers and string literals, SQL comments (`--` and `/* */` with nesting), error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
 - **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/AVG/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, IN / NOT IN (integers, text, booleans, timestamps, NULL semantics, UPDATE/DELETE, JOIN), INNER JOIN (basic, aliases, WHERE filter, empty result, SELECT *, ambiguous column errors, ORDER BY, LIMIT/OFFSET), BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
 

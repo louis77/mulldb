@@ -946,10 +946,12 @@ func execSelectStatic(exprs []parser.Expr) (*Result, error) {
 
 // scopeTable represents one table in a join scope.
 type scopeTable struct {
-	name   string           // original table name
-	alias  string           // alias (or name if no alias)
-	def    *storage.TableDef
-	offset int              // index into merged row where this table's columns start
+	schema    string           // schema name ("information_schema", etc.), "" for user tables
+	name      string           // original table name
+	alias     string           // alias (or name if no alias)
+	def       *storage.TableDef
+	offset    int              // index into merged row where this table's columns start
+	isCatalog bool             // true for virtual catalog tables
 }
 
 // scopeColumn represents one column in the merged join row.
@@ -1011,16 +1013,25 @@ func (e *Executor) buildJoinScope(s *parser.SelectStmt) (*joinScope, error) {
 	offset := 0
 
 	// FROM table.
-	def, ok := e.engine.GetTable(s.From.Name)
-	if !ok {
-		return nil, &storage.TableNotFoundError{Name: s.From.String()}
+	var def *storage.TableDef
+	var fromIsCatalog bool
+	if catDef, ok := getCatalogTable(s.From.Schema, s.From.Name); ok {
+		def = catDef
+		fromIsCatalog = true
+	} else {
+		var ok bool
+		def, ok = e.engine.GetTable(s.From.Name)
+		if !ok {
+			return nil, &storage.TableNotFoundError{Name: s.From.String()}
+		}
 	}
 	alias := s.FromAlias
 	if alias == "" {
 		alias = s.From.Name
 	}
 	scope.tables = append(scope.tables, scopeTable{
-		name: s.From.Name, alias: alias, def: def, offset: offset,
+		schema: s.From.Schema, name: s.From.Name, alias: alias,
+		def: def, offset: offset, isCatalog: fromIsCatalog,
 	})
 	for i, c := range def.Columns {
 		scope.columns = append(scope.columns, scopeColumn{
@@ -1031,9 +1042,17 @@ func (e *Executor) buildJoinScope(s *parser.SelectStmt) (*joinScope, error) {
 
 	// JOIN tables.
 	for ji, j := range s.Joins {
-		jdef, ok := e.engine.GetTable(j.Table.Name)
-		if !ok {
-			return nil, &storage.TableNotFoundError{Name: j.Table.String()}
+		var jdef *storage.TableDef
+		var jIsCatalog bool
+		if catDef, ok := getCatalogTable(j.Table.Schema, j.Table.Name); ok {
+			jdef = catDef
+			jIsCatalog = true
+		} else {
+			var ok bool
+			jdef, ok = e.engine.GetTable(j.Table.Name)
+			if !ok {
+				return nil, &storage.TableNotFoundError{Name: j.Table.String()}
+			}
 		}
 		jalias := j.Alias
 		if jalias == "" {
@@ -1041,7 +1060,8 @@ func (e *Executor) buildJoinScope(s *parser.SelectStmt) (*joinScope, error) {
 		}
 		tableIdx := ji + 1
 		scope.tables = append(scope.tables, scopeTable{
-			name: j.Table.Name, alias: jalias, def: jdef, offset: offset,
+			schema: j.Table.Schema, name: j.Table.Name, alias: jalias,
+			def: jdef, offset: offset, isCatalog: jIsCatalog,
 		})
 		for i, c := range jdef.Columns {
 			scope.columns = append(scope.columns, scopeColumn{
@@ -1432,9 +1452,12 @@ func (e *Executor) execSelectJoin(s *parser.SelectStmt, tr *Trace) (*Result, err
 		return nil, WrapError(err)
 	}
 
-	// Compile ON conditions for each join.
+	// Compile ON conditions for each join. Cross-joins (On == nil) have no filter.
 	onFilters := make([]func(storage.Row) bool, len(s.Joins))
 	for i, j := range s.Joins {
+		if j.On == nil {
+			continue // implicit cross-join — no ON condition
+		}
 		f, err := buildJoinFilter(j.On, scope)
 		if err != nil {
 			return nil, WrapError(err)
@@ -1484,7 +1507,12 @@ func (e *Executor) execSelectJoin(s *parser.SelectStmt, tr *Trace) (*Result, err
 	tableRows := make([][]storage.Row, len(scope.tables))
 	var scanned int64
 	for i, t := range scope.tables {
-		it, err := e.engine.Scan(t.name)
+		var it storage.RowIterator
+		if t.isCatalog {
+			it, err = scanCatalogTable(t.schema, t.name, e.engine)
+		} else {
+			it, err = e.engine.Scan(t.name)
+		}
 		if err != nil {
 			return nil, WrapError(err)
 		}
@@ -1520,7 +1548,7 @@ func (e *Executor) execSelectJoin(s *parser.SelectStmt, tr *Trace) (*Result, err
 
 			// Apply ON conditions for all joins.
 			for _, onFilter := range onFilters {
-				if !onFilter(merged) {
+				if onFilter != nil && !onFilter(merged) {
 					return
 				}
 			}
