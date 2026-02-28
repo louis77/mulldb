@@ -1967,3 +1967,164 @@ func TestConcatOperator_ColumnMetadataFromTable(t *testing.T) {
 		t.Errorf("TypeOID = %d, want %d (OIDText)", r.Columns[0].TypeOID, OIDText)
 	}
 }
+
+// -------------------------------------------------------------------------
+// LIKE / ILIKE predicate
+// -------------------------------------------------------------------------
+
+func TestExecutor_LikePercent(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('alice'), ('Charlie')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name LIKE 'A%'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Alice" {
+		t.Errorf("got %q, want Alice", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_LikeUnderscore(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('ace')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name LIKE '_ob'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Bob" {
+		t.Errorf("got %q, want Bob", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_NotLike(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('Charlie')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name NOT LIKE '%li%'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Bob" {
+		t.Errorf("got %q, want Bob", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Ilike(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('alice')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name ILIKE 'a%'")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_NotIlike(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('alice')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name NOT ILIKE 'a%'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Bob" {
+		t.Errorf("got %q, want Bob", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_LikeEscape(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val TEXT)")
+	exec(t, e, `INSERT INTO t (val) VALUES ('100%'), ('100x'), ('100')`)
+
+	r := exec(t, e, `SELECT val FROM t WHERE val LIKE '100\%' ESCAPE '\'`)
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "100%" {
+		t.Errorf("got %q, want 100%%", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_LikeNullPropagation(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), (NULL)")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name LIKE '%'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1 (NULL should not match)", len(r.Rows))
+	}
+}
+
+func TestExecutor_LikeInUpdate(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT, active BOOLEAN)")
+	exec(t, e, "INSERT INTO t (name, active) VALUES ('Alice', TRUE), ('Bob', TRUE), ('alex', TRUE)")
+
+	exec(t, e, "UPDATE t SET active = FALSE WHERE name LIKE 'A%'")
+	r := exec(t, e, "SELECT name, active FROM t WHERE active = TRUE")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_LikeInDelete(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('Charlie')")
+
+	exec(t, e, "DELETE FROM t WHERE name LIKE '%ob'")
+	r := exec(t, e, "SELECT name FROM t")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_LikeWithAnd(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT, age INTEGER)")
+	exec(t, e, "INSERT INTO t (name, age) VALUES ('Alice', 30), ('Bob', 25), ('Alex', 40)")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name LIKE 'A%' AND age > 25")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_LikeJoin(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER, name TEXT)")
+	exec(t, e, "CREATE TABLE emails (user_id INTEGER, addr TEXT)")
+	exec(t, e, "INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+	exec(t, e, "INSERT INTO emails (user_id, addr) VALUES (1, 'alice@example.com'), (2, 'bob@test.org')")
+
+	r := exec(t, e, "SELECT u.name FROM users u JOIN emails e ON u.id = e.user_id WHERE e.addr LIKE '%example%'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Alice" {
+		t.Errorf("got %q, want Alice", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_LikeDynamicPattern(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT, pat TEXT)")
+	exec(t, e, "INSERT INTO t (name, pat) VALUES ('Alice', 'A%'), ('Bob', 'C%')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name LIKE pat")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "Alice" {
+		t.Errorf("got %q, want Alice", r.Rows[0][0])
+	}
+}

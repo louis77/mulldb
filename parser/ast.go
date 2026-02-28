@@ -199,6 +199,15 @@ type NotExpr struct {
 	Expr Expr
 }
 
+// LikeExpr represents [NOT] LIKE / [NOT] ILIKE pattern [ESCAPE char].
+type LikeExpr struct {
+	Expr            Expr // left-hand value
+	Pattern         Expr // right-hand pattern
+	Escape          Expr // optional ESCAPE character (nil if not specified)
+	Not             bool // true for NOT LIKE / NOT ILIKE
+	CaseInsensitive bool // true for ILIKE
+}
+
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
@@ -211,3 +220,4 @@ func (*FunctionCallExpr) exprNode()  {}
 func (*AliasExpr) exprNode()         {}
 func (*IsNullExpr) exprNode()        {}
 func (*NotExpr) exprNode()           {}
+func (*LikeExpr) exprNode()          {}

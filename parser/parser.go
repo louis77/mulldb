@@ -576,6 +576,50 @@ func (p *parser) parseComparison() (Expr, error) {
 		return &IsNullExpr{Expr: left, Not: not}, nil
 	}
 
+	// [NOT] LIKE / [NOT] ILIKE pattern [ESCAPE char]
+	likeNot := false
+	if p.cur.Type == TokenNot {
+		// Peek: NOT followed by LIKE or ILIKE means NOT LIKE / NOT ILIKE.
+		// Save lexer state to restore if NOT is not part of a LIKE predicate.
+		savedPos := p.lexer.pos
+		savedCh := p.lexer.ch
+		savedWidth := p.lexer.width
+		savedCur := p.cur
+		p.next()
+		if p.cur.Type == TokenLike || p.cur.Type == TokenIlike {
+			likeNot = true
+		} else {
+			// Restore: NOT is not part of a LIKE predicate.
+			p.lexer.pos = savedPos
+			p.lexer.ch = savedCh
+			p.lexer.width = savedWidth
+			p.cur = savedCur
+		}
+	}
+	if p.cur.Type == TokenLike || p.cur.Type == TokenIlike {
+		caseInsensitive := p.cur.Type == TokenIlike
+		p.next() // consume LIKE/ILIKE
+		pattern, err := p.parseAdditive()
+		if err != nil {
+			return nil, err
+		}
+		var escape Expr
+		if p.cur.Type == TokenEscape {
+			p.next()
+			escape, err = p.parsePrimary()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &LikeExpr{
+			Expr:            left,
+			Pattern:         pattern,
+			Escape:          escape,
+			Not:             likeNot,
+			CaseInsensitive: caseInsensitive,
+		}, nil
+	}
+
 	var op string
 	switch p.cur.Type {
 	case TokenEq:

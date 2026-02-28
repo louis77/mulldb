@@ -68,8 +68,8 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | E061-01 | Comparison predicate | **Done** (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`) |
 | E061-02 | BETWEEN predicate | Open |
 | E061-03 | IN predicate with list of values | Open |
-| E061-04 | LIKE predicate | Open |
-| E061-05 | LIKE predicate: ESCAPE clause | Open |
+| E061-04 | LIKE predicate | **Done** (`LIKE`, `NOT LIKE`, plus PostgreSQL `ILIKE`/`NOT ILIKE` for case-insensitive matching) |
+| E061-05 | LIKE predicate: ESCAPE clause | **Done** (`LIKE pattern ESCAPE char`; single-character escape) |
 | E061-06 | NULL predicate (IS NULL) | **Done** (`IS NULL` and `IS NOT NULL`; comparisons with NULL yield NULL per SQL standard) |
 | E061-07 | Quantified comparison predicate | Open |
 | E061-08 | EXISTS predicate | Open |
@@ -361,7 +361,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 - Wire protocol compatibility (host language binding)
 
 ### Biggest gaps to close
-1. **Predicates**: BETWEEN, IN, LIKE
+1. **Predicates**: BETWEEN, IN
 2. **Expressions**: CASE, CAST, COALESCE (arithmetic is done)
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet

@@ -883,6 +883,11 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 			return !v
 		}, nil
 
+	case *parser.LikeExpr:
+		return compileLikeExpr(e, func(expr parser.Expr) (exprFunc, error) {
+			return compileJoinExpr(expr, scope)
+		})
+
 	case *parser.FunctionCallExpr:
 		fn, ok := scalarRegistry[e.Name]
 		if !ok {
@@ -1657,6 +1662,11 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 			return !v
 		}, nil
 
+	case *parser.LikeExpr:
+		return compileLikeExpr(e, func(expr parser.Expr) (exprFunc, error) {
+			return compileExpr(expr, def)
+		})
+
 	case *parser.FunctionCallExpr:
 		fn, ok := scalarRegistry[e.Name]
 		if !ok {
@@ -1685,6 +1695,100 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 	default:
 		return nil, fmt.Errorf("unsupported expression type %T", expr)
 	}
+}
+
+// compileLikeExpr compiles a LikeExpr using the provided compile function for
+// sub-expressions. This allows reuse between compileExpr and compileJoinExpr.
+func compileLikeExpr(e *parser.LikeExpr, compile func(parser.Expr) (exprFunc, error)) (exprFunc, error) {
+	valFn, err := compile(e.Expr)
+	if err != nil {
+		return nil, err
+	}
+	patFn, err := compile(e.Pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve escape rune if ESCAPE clause is present.
+	var escRune rune
+	hasEscape := e.Escape != nil
+	var escFn exprFunc
+	if hasEscape {
+		if lit, ok := e.Escape.(*parser.StringLit); ok {
+			r, escErr := resolveEscapeRune(lit.Value)
+			if escErr != nil {
+				return nil, escErr
+			}
+			escRune = r
+		} else {
+			escFn, err = compile(e.Escape)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Static pattern optimization: pre-compile regex if pattern is a string literal.
+	if lit, ok := e.Pattern.(*parser.StringLit); ok && escFn == nil {
+		re, reErr := likeToRegex(lit.Value, escRune, hasEscape, e.CaseInsensitive)
+		if reErr != nil {
+			return nil, reErr
+		}
+		not := e.Not
+		return func(r storage.Row) any {
+			v := valFn(r)
+			if v == nil {
+				return nil
+			}
+			s, ok := v.(string)
+			if !ok {
+				return nil
+			}
+			result := re.MatchString(s)
+			if not {
+				return !result
+			}
+			return result
+		}, nil
+	}
+
+	// Dynamic pattern: compile regex per-row.
+	not := e.Not
+	ci := e.CaseInsensitive
+	return func(r storage.Row) any {
+		val, pat := valFn(r), patFn(r)
+		if val == nil || pat == nil {
+			return nil
+		}
+		vs, vok := val.(string)
+		ps, pok := pat.(string)
+		if !vok || !pok {
+			return nil
+		}
+		esc := escRune
+		he := hasEscape
+		if escFn != nil {
+			ev := escFn(r)
+			if ev == nil {
+				return nil
+			}
+			var escErr error
+			esc, escErr = resolveEscapeRune(ev)
+			if escErr != nil {
+				return nil
+			}
+			he = true
+		}
+		re, err := likeToRegex(ps, esc, he, ci)
+		if err != nil {
+			return nil
+		}
+		result := re.MatchString(vs)
+		if not {
+			return !result
+		}
+		return result
+	}, nil
 }
 
 func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, error) {

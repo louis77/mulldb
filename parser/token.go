@@ -74,6 +74,9 @@ const (
 	TokenBegin     // BEGIN
 	TokenCommit    // COMMIT
 	TokenRollback  // ROLLBACK
+	TokenLike      // LIKE
+	TokenIlike     // ILIKE
+	TokenEscape    // ESCAPE
 )
 
 var tokenNames = map[TokenType]string{
@@ -136,6 +139,9 @@ var tokenNames = map[TokenType]string{
 	TokenBegin:     "BEGIN",
 	TokenCommit:    "COMMIT",
 	TokenRollback:  "ROLLBACK",
+	TokenLike:      "LIKE",
+	TokenIlike:     "ILIKE",
+	TokenEscape:    "ESCAPE",
 }
 
 func (t TokenType) String() string {
@@ -193,6 +199,9 @@ var keywords = map[string]TokenType{
 	"BEGIN":    TokenBegin,
 	"COMMIT":   TokenCommit,
 	"ROLLBACK": TokenRollback,
+	"LIKE":     TokenLike,
+	"ILIKE":    TokenIlike,
+	"ESCAPE":   TokenEscape,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

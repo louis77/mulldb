@@ -1631,3 +1631,165 @@ func TestParse_MultiArgFunction(t *testing.T) {
 		t.Fatalf("args = %d, want 3", len(fn.Args))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// LIKE / ILIKE predicate
+// ---------------------------------------------------------------------------
+
+func TestParse_Like(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE name LIKE '%foo%'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	like, ok := sel.Where.(*LikeExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *LikeExpr", sel.Where)
+	}
+	assertColumnRef(t, like.Expr, "name")
+	lit, ok := like.Pattern.(*StringLit)
+	if !ok {
+		t.Fatalf("Pattern = %T, want *StringLit", like.Pattern)
+	}
+	if lit.Value != "%foo%" {
+		t.Errorf("pattern = %q, want %%foo%%", lit.Value)
+	}
+	if like.Not {
+		t.Error("Not = true, want false")
+	}
+	if like.CaseInsensitive {
+		t.Error("CaseInsensitive = true, want false")
+	}
+	if like.Escape != nil {
+		t.Error("Escape should be nil")
+	}
+}
+
+func TestParse_NotLike(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE name NOT LIKE 'x%'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	like, ok := sel.Where.(*LikeExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *LikeExpr", sel.Where)
+	}
+	if !like.Not {
+		t.Error("Not = false, want true")
+	}
+	if like.CaseInsensitive {
+		t.Error("CaseInsensitive = true, want false")
+	}
+}
+
+func TestParse_Ilike(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE name ILIKE '%foo%'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	like, ok := sel.Where.(*LikeExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *LikeExpr", sel.Where)
+	}
+	if like.Not {
+		t.Error("Not = true, want false")
+	}
+	if !like.CaseInsensitive {
+		t.Error("CaseInsensitive = false, want true")
+	}
+}
+
+func TestParse_NotIlike(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE name NOT ILIKE '%foo%'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	like, ok := sel.Where.(*LikeExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *LikeExpr", sel.Where)
+	}
+	if !like.Not {
+		t.Error("Not = false, want true")
+	}
+	if !like.CaseInsensitive {
+		t.Error("CaseInsensitive = false, want true")
+	}
+}
+
+func TestParse_LikeEscape(t *testing.T) {
+	stmt, err := Parse(`SELECT * FROM t WHERE name LIKE '100\%' ESCAPE '\'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	like, ok := sel.Where.(*LikeExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *LikeExpr", sel.Where)
+	}
+	if like.Escape == nil {
+		t.Fatal("Escape should not be nil")
+	}
+	esc, ok := like.Escape.(*StringLit)
+	if !ok {
+		t.Fatalf("Escape = %T, want *StringLit", like.Escape)
+	}
+	if esc.Value != `\` {
+		t.Errorf("escape = %q, want %q", esc.Value, `\`)
+	}
+}
+
+func TestParse_LikeWithColumnRef(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE a LIKE b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	like, ok := sel.Where.(*LikeExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *LikeExpr", sel.Where)
+	}
+	assertColumnRef(t, like.Expr, "a")
+	assertColumnRef(t, like.Pattern, "b")
+}
+
+func TestParse_LikeWithAnd(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE a LIKE 'x%' AND b = 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *BinaryExpr (AND)", sel.Where)
+	}
+	if bin.Op != "AND" {
+		t.Fatalf("op = %q, want AND", bin.Op)
+	}
+	_, ok = bin.Left.(*LikeExpr)
+	if !ok {
+		t.Fatalf("left = %T, want *LikeExpr", bin.Left)
+	}
+}
+
+func TestParse_NotWithLikeDoesNotConflict(t *testing.T) {
+	// "NOT col LIKE pattern" should parse as NOT (col LIKE pattern)
+	stmt, err := Parse("SELECT * FROM t WHERE NOT name LIKE '%x'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	not, ok := sel.Where.(*NotExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *NotExpr", sel.Where)
+	}
+	like, ok := not.Expr.(*LikeExpr)
+	if !ok {
+		t.Fatalf("inner = %T, want *LikeExpr", not.Expr)
+	}
+	if like.Not {
+		t.Error("LikeExpr.Not = true, want false (NOT is outer)")
+	}
+}
