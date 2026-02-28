@@ -43,7 +43,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **SQL support** — CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Secondary indexes** — `CREATE [UNIQUE] INDEX [name] ON table(column)` and `DROP INDEX name ON table`; optional index names (auto-generated as `idx_{column}`); table-scoped names; automatic query acceleration for `WHERE col = literal`; NULL values not indexed (multiple NULLs allowed in UNIQUE indexes per SQL standard)
-- **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
+- **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
 - **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `NOW()`, `VERSION()`, math functions (`ABS`, `ROUND`, `CEIL`/`CEILING`, `FLOOR`, `POWER`/`POW`, `SQRT`, `MOD`), and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), FLOAT (64-bit IEEE 754), TEXT, BOOLEAN, TIMESTAMP (UTC), NULL
@@ -184,7 +184,7 @@ SELECT COUNT(<column>) FROM <table>;
 SELECT SUM(<column>) FROM <table>;
 SELECT MIN(<column>) FROM <table>;
 SELECT MAX(<column>) FROM <table>;
-SELECT COUNT(*), SUM(<column>), MIN(<column>), MAX(<column>) FROM <table>;
+SELECT COUNT(*), SUM(<column>), AVG(<column>), MIN(<column>), MAX(<column>) FROM <table>;
 
 -- Update rows
 UPDATE <table> SET <column> = <value>, ... WHERE <condition>;
@@ -240,6 +240,7 @@ Aggregate functions collapse all matching rows into a single result row. Multipl
 | `COUNT(*)` | — | `INTEGER` | Count of all rows |
 | `COUNT(col)` | any column | `INTEGER` | Count of non-NULL values in `col` |
 | `SUM(col)` | `INTEGER` or `FLOAT` column | same as `col` | Sum of all non-NULL values |
+| `AVG(col)` | `INTEGER` or `FLOAT` column | `FLOAT` | Average of all non-NULL values; NULL if no rows |
 | `MIN(col)` | `INTEGER`, `FLOAT`, `TEXT`, or `TIMESTAMP` column | same as `col` | Smallest non-NULL value |
 | `MAX(col)` | `INTEGER`, `FLOAT`, `TEXT`, or `TIMESTAMP` column | same as `col` | Largest non-NULL value |
 
@@ -261,15 +262,20 @@ SELECT SUM(amount) FROM orders;
 -- -----
 --   80
 
+SELECT AVG(amount) FROM orders;
+--  avg
+-- -----
+--   20
+
 SELECT MIN(amount), MAX(amount) FROM orders;
 --  min | max
 -- -----+-----
 --    5 |  40
 
-SELECT COUNT(*), SUM(amount), MIN(amount), MAX(amount) FROM orders;
---  count | sum | min | max
--- -------+-----+-----+-----
---      4 |  80 |   5 |  40
+SELECT COUNT(*), SUM(amount), AVG(amount), MIN(amount), MAX(amount) FROM orders;
+--  count | sum | avg | min | max
+-- -------+-----+-----+-----+-----
+--      4 |  80 |  20 |   5 |  40
 ```
 
 ### Column Aliases (AS)
@@ -908,7 +914,7 @@ go test -race ./...
 The test suite covers:
 - **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, LIKE / NOT LIKE / ILIKE / NOT ILIKE with ESCAPE, IN / NOT IN, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, INNER JOIN (with aliases, qualified columns, multi-join), optional FROM clause, UTF-8 identifiers and string literals, SQL comments (`--` and `/* */` with nesting), error cases
 - **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
-- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, IN / NOT IN (integers, text, booleans, timestamps, NULL semantics, UPDATE/DELETE, JOIN), INNER JOIN (basic, aliases, WHERE filter, empty result, SELECT *, ambiguous column errors, ORDER BY, LIMIT/OFFSET), BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
+- **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/AVG/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, IN / NOT IN (integers, text, booleans, timestamps, NULL semantics, UPDATE/DELETE, JOIN), INNER JOIN (basic, aliases, WHERE filter, empty result, SELECT *, ambiguous column errors, ORDER BY, LIMIT/OFFSET), BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
 
@@ -936,7 +942,6 @@ mulldb is intentionally minimal. Things it does **not** support:
 - **Transactions** — BEGIN/COMMIT/ROLLBACK are accepted but are no-ops; every statement auto-commits and there is no rollback or isolation
 - **LEFT/RIGHT/FULL OUTER JOINs** — only INNER JOIN is supported
 - **GROUP BY / HAVING**
-- **AVG** — not implemented (use `SUM` / `COUNT` manually)
 - **Decimal arithmetic** — no exact-precision DECIMAL/NUMERIC types; use FLOAT for approximate numeric values
 - **Subqueries**
 - **Extended query protocol** — only SimpleQuery flow

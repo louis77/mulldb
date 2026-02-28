@@ -382,7 +382,7 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 	// Detect aggregate vs non-aggregate columns.
 	isAggFunc := func(name string) bool {
 		switch name {
-		case "COUNT", "SUM", "MIN", "MAX":
+		case "COUNT", "SUM", "MIN", "MAX", "AVG":
 			return true
 		}
 		return false
@@ -713,9 +713,10 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		count     int64
 		sumI      int64
 		sumF      float64
-		minV      any
-		maxV      any
-		hasV      bool
+		minV         any
+		maxV         any
+		hasV         bool
+		countNonNull int64
 	}
 
 	accs := make([]*aggAcc, len(s.Columns))
@@ -753,6 +754,13 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 			}
 			if acc.inputType != storage.TypeInteger && acc.inputType != storage.TypeFloat {
 				return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("SUM: column must be INTEGER or FLOAT, got %s", acc.inputType)}
+			}
+		case "AVG":
+			if acc.colIdx < 0 {
+				return nil, &QueryError{Code: "42883", Message: "AVG requires a column argument"}
+			}
+			if acc.inputType != storage.TypeInteger && acc.inputType != storage.TypeFloat {
+				return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("AVG: column must be INTEGER or FLOAT, got %s", acc.inputType)}
 			}
 		case "MIN", "MAX":
 			if acc.colIdx < 0 {
@@ -837,6 +845,16 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 					acc.maxV = v
 					acc.hasV = true
 				}
+			case "AVG":
+				val := storage.RowValue(row.Values, acc.colIdx)
+				switch v := val.(type) {
+				case int64:
+					acc.sumI += v
+					acc.countNonNull++
+				case float64:
+					acc.sumF += v
+					acc.countNonNull++
+				}
 			}
 		}
 	}
@@ -857,6 +875,14 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 			resultRow[i] = formatValue(acc.minV)
 		case "MAX":
 			resultRow[i] = formatValue(acc.maxV)
+		case "AVG":
+			if acc.countNonNull == 0 {
+				resultRow[i] = nil
+			} else if acc.inputType == storage.TypeFloat {
+				resultRow[i] = formatValue(acc.sumF / float64(acc.countNonNull))
+			} else {
+				resultRow[i] = formatValue(float64(acc.sumI) / float64(acc.countNonNull))
+			}
 		}
 	}
 
@@ -2443,6 +2469,8 @@ func aggregateTypeOID(funcName string, inputType storage.DataType) int32 {
 			return OIDFloat8
 		}
 		return OIDInt8
+	case "AVG":
+		return OIDFloat8
 	case "MIN", "MAX":
 		return typeOID(inputType)
 	default:
@@ -2452,7 +2480,7 @@ func aggregateTypeOID(funcName string, inputType storage.DataType) int32 {
 
 func aggregateTypeSize(funcName string, inputType storage.DataType) int16 {
 	switch funcName {
-	case "COUNT", "SUM":
+	case "COUNT", "SUM", "AVG":
 		return 8 // int64 and float64 are both 8 bytes
 	case "MIN", "MAX":
 		return typeSize(inputType)

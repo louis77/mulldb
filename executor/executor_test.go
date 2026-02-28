@@ -418,6 +418,87 @@ func TestExecutor_Aggregate_EmptyTable(t *testing.T) {
 	}
 }
 
+func TestExecutor_Aggregate_Avg(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (10), (20), (30)")
+
+	r := exec(t, e, "SELECT AVG(val) FROM t")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "20" {
+		t.Errorf("avg = %q, want 20", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_AvgFloat(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val FLOAT)")
+	exec(t, e, "INSERT INTO t VALUES (1.5), (2.5), (3.0)")
+
+	r := exec(t, e, "SELECT AVG(val) FROM t")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	got := string(r.Rows[0][0])
+	// (1.5 + 2.5 + 3.0) / 3 = 7.0 / 3 ≈ 2.3333...
+	if got != "2.3333333333333335" {
+		t.Errorf("avg = %q, want 2.3333333333333335", got)
+	}
+}
+
+func TestExecutor_Aggregate_AvgEmpty(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+
+	r := exec(t, e, "SELECT AVG(val) FROM t")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if r.Rows[0][0] != nil {
+		t.Errorf("avg of empty table = %q, want NULL", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_AvgNulls(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t (val) VALUES (10), (NULL), (30), (NULL)")
+
+	r := exec(t, e, "SELECT AVG(val) FROM t")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	// (10 + 30) / 2 = 20
+	if string(r.Rows[0][0]) != "20" {
+		t.Errorf("avg = %q, want 20", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_Aggregate_AvgMixed(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (10), (20), (30)")
+
+	r := exec(t, e, "SELECT COUNT(*), AVG(val), SUM(val) FROM t")
+	if len(r.Columns) != 3 {
+		t.Fatalf("columns = %d, want 3", len(r.Columns))
+	}
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("count = %q, want 3", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "20" {
+		t.Errorf("avg = %q, want 20", r.Rows[0][1])
+	}
+	if string(r.Rows[0][2]) != "60" {
+		t.Errorf("sum = %q, want 60", r.Rows[0][2])
+	}
+}
+
 func TestExecutor_Aggregate_MixedError(t *testing.T) {
 	e := setup(t)
 	exec(t, e, "CREATE TABLE t (id INTEGER, val INTEGER)")
