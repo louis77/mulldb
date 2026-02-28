@@ -74,9 +74,10 @@ const (
 	TokenBegin     // BEGIN
 	TokenCommit    // COMMIT
 	TokenRollback  // ROLLBACK
-	TokenLike      // LIKE
-	TokenIlike     // ILIKE
-	TokenEscape    // ESCAPE
+	TokenLike        // LIKE
+	TokenIlike       // ILIKE
+	TokenEscape      // ESCAPE
+	TokenTimestampKW // TIMESTAMP / TIMESTAMPTZ
 )
 
 var tokenNames = map[TokenType]string{
@@ -139,9 +140,10 @@ var tokenNames = map[TokenType]string{
 	TokenBegin:     "BEGIN",
 	TokenCommit:    "COMMIT",
 	TokenRollback:  "ROLLBACK",
-	TokenLike:      "LIKE",
-	TokenIlike:     "ILIKE",
-	TokenEscape:    "ESCAPE",
+	TokenLike:        "LIKE",
+	TokenIlike:       "ILIKE",
+	TokenEscape:      "ESCAPE",
+	TokenTimestampKW: "TIMESTAMP",
 }
 
 func (t TokenType) String() string {
@@ -199,9 +201,11 @@ var keywords = map[string]TokenType{
 	"BEGIN":    TokenBegin,
 	"COMMIT":   TokenCommit,
 	"ROLLBACK": TokenRollback,
-	"LIKE":     TokenLike,
-	"ILIKE":    TokenIlike,
-	"ESCAPE":   TokenEscape,
+	"LIKE":        TokenLike,
+	"ILIKE":       TokenIlike,
+	"ESCAPE":      TokenEscape,
+	"TIMESTAMP":   TokenTimestampKW,
+	"TIMESTAMPTZ": TokenTimestampKW,
 }
 
 // LookupKeyword returns the keyword token type for ident, or TokenIdent

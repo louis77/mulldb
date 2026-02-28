@@ -242,9 +242,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 |----|---------|--------|
 | F051-01 | DATE data type | Open |
 | F051-02 | TIME data type with fractional seconds precision | Open |
-| F051-03 | TIMESTAMP data type with fractional seconds precision | Open |
-| F051-04 | Comparison predicate on DATE, TIME, and TIMESTAMP | Open |
-| F051-05 | Explicit CAST between datetime types and character string types | Open |
+| F051-03 | TIMESTAMP data type with fractional seconds precision | **Done** (TIMESTAMP, TIMESTAMPTZ, TIMESTAMP WITH TIME ZONE; UTC-only; microsecond precision; stored as int64 µs since epoch) |
+| F051-04 | Comparison predicate on DATE, TIME, and TIMESTAMP | **Partial** (TIMESTAMP comparisons work; DATE and TIME not implemented) |
+| F051-05 | Explicit CAST between datetime types and character string types | **Partial** (implicit string→timestamp coercion on INSERT/UPDATE and in WHERE comparisons; no explicit CAST) |
 | F051-06 | CURRENT_DATE | Open |
 | F051-07 | LOCALTIME | Open |
 | F051-08 | LOCALTIMESTAMP | Open |
@@ -345,9 +345,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~42 |
-| **Partial** | ~6 |
-| **Open** | ~129 |
+| **Done** | ~43 |
+| **Partial** | ~8 |
+| **Open** | ~126 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
@@ -366,7 +366,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet
 5. **Transactions**: No BEGIN / COMMIT / ROLLBACK
-6. **Data types**: No floating-point, decimal, or date/time types
+6. **Data types**: No floating-point, decimal, DATE, or TIME types (TIMESTAMP is done)
 7. **Constraints**: No UNIQUE, FOREIGN KEY, CHECK, DEFAULT
 8. **Subqueries**: No subquery support anywhere
 9. **UNION / EXCEPT**: No set operations

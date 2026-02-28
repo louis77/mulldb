@@ -165,11 +165,26 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 		dataType = "TEXT"
 	case TokenBooleanKW:
 		dataType = "BOOLEAN"
+	case TokenTimestampKW:
+		dataType = "TIMESTAMP"
 	default:
 		return ColumnDef{}, fmt.Errorf("expected data type, got %q at position %d",
 			p.cur.Literal, p.cur.Pos)
 	}
 	p.next()
+
+	// For TIMESTAMP, consume optional "WITH TIME ZONE" (all map to the same type).
+	if dataType == "TIMESTAMP" && p.cur.Type == TokenIdent && strings.EqualFold(p.cur.Literal, "WITH") {
+		p.next() // consume WITH
+		if p.cur.Type != TokenIdent || !strings.EqualFold(p.cur.Literal, "TIME") {
+			return ColumnDef{}, fmt.Errorf("expected TIME after WITH at position %d", p.cur.Pos)
+		}
+		p.next() // consume TIME
+		if p.cur.Type != TokenIdent || !strings.EqualFold(p.cur.Literal, "ZONE") {
+			return ColumnDef{}, fmt.Errorf("expected ZONE after TIME at position %d", p.cur.Pos)
+		}
+		p.next() // consume ZONE
+	}
 
 	// Optional PRIMARY KEY constraint.
 	var pk bool

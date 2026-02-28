@@ -9,6 +9,7 @@ const (
 	TypeInteger DataType = iota
 	TypeText
 	TypeBoolean
+	TypeTimestamp
 )
 
 func (d DataType) String() string {
@@ -19,6 +20,8 @@ func (d DataType) String() string {
 		return "TEXT"
 	case TypeBoolean:
 		return "BOOLEAN"
+	case TypeTimestamp:
+		return "TIMESTAMP"
 	default:
 		return "UNKNOWN"
 	}
@@ -51,10 +54,11 @@ func (d *TableDef) PrimaryKeyColumn() int {
 // Row is a single row of data with an internal ID.
 // Values are in column-definition order. Each value is one of:
 //
-//	int64   (INTEGER)
-//	string  (TEXT)
-//	bool    (BOOLEAN)
-//	nil     (NULL)
+//	int64      (INTEGER)
+//	string     (TEXT)
+//	bool       (BOOLEAN)
+//	time.Time  (TIMESTAMP)
+//	nil        (NULL)
 type Row struct {
 	ID     int64
 	Values []any

@@ -27,12 +27,13 @@ type Result struct {
 	Tag string
 }
 
-// PostgreSQL type OIDs for the three supported types.
+// PostgreSQL type OIDs for the supported types.
 const (
-	OIDInt8    int32 = 20  // INT8 / BIGINT
-	OIDText    int32 = 25  // TEXT
-	OIDBool    int32 = 16  // BOOLEAN
-	OIDUnknown int32 = 705 // UNKNOWN (used for NULL columns)
+	OIDInt8        int32 = 20   // INT8 / BIGINT
+	OIDText        int32 = 25   // TEXT
+	OIDBool        int32 = 16   // BOOLEAN
+	OIDTimestampTZ int32 = 1184 // TIMESTAMPTZ
+	OIDUnknown     int32 = 705  // UNKNOWN (used for NULL columns)
 )
 
 // -------------------------------------------------------------------------

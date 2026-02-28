@@ -41,8 +41,9 @@ func registerPGType() {
 				{ID: 1, Values: []any{int64(16), "bool"}},
 				{ID: 2, Values: []any{int64(20), "int8"}},
 				{ID: 3, Values: []any{int64(25), "text"}},
-				{ID: 4, Values: []any{int64(9900), "geometry"}},
-				{ID: 5, Values: []any{int64(9901), "geography"}},
+				{ID: 4, Values: []any{int64(1184), "timestamptz"}},
+				{ID: 5, Values: []any{int64(9900), "geometry"}},
+				{ID: 6, Values: []any{int64(9901), "geography"}},
 			}
 		},
 	}

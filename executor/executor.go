@@ -2012,6 +2012,9 @@ func evalLiteral(expr parser.Expr) (any, error) {
 	case *parser.UnaryExpr:
 		val, _, err := evalStaticExpr(e)
 		return val, err
+	case *parser.FunctionCallExpr:
+		val, _, err := evalScalarFunction(e)
+		return val, err
 	default:
 		return nil, fmt.Errorf("expected literal value, got %T", expr)
 	}
@@ -2025,6 +2028,8 @@ func parseDataType(s string) (storage.DataType, error) {
 		return storage.TypeText, nil
 	case "BOOLEAN":
 		return storage.TypeBoolean, nil
+	case "TIMESTAMP":
+		return storage.TypeTimestamp, nil
 	default:
 		return 0, fmt.Errorf("unknown data type %q", s)
 	}
@@ -2069,6 +2074,8 @@ func typeOID(dt storage.DataType) int32 {
 		return OIDText
 	case storage.TypeBoolean:
 		return OIDBool
+	case storage.TypeTimestamp:
+		return OIDTimestampTZ
 	default:
 		return OIDUnknown
 	}
@@ -2080,6 +2087,8 @@ func typeSize(dt storage.DataType) int16 {
 		return 8
 	case storage.TypeBoolean:
 		return 1
+	case storage.TypeTimestamp:
+		return 8
 	default:
 		return -1 // variable length
 	}
@@ -2101,6 +2110,8 @@ func formatValue(v any) []byte {
 			return []byte("t")
 		}
 		return []byte("f")
+	case time.Time:
+		return []byte(val.Format("2006-01-02 15:04:05+00"))
 	default:
 		return []byte(fmt.Sprintf("%v", v))
 	}

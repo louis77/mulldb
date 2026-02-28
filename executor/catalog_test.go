@@ -15,8 +15,8 @@ func TestCatalog_SelectStar(t *testing.T) {
 	if r.Columns[0].Name != "oid" || r.Columns[1].Name != "typname" {
 		t.Errorf("columns = [%s, %s], want [oid, typname]", r.Columns[0].Name, r.Columns[1].Name)
 	}
-	if len(r.Rows) != 5 {
-		t.Fatalf("rows = %d, want 5", len(r.Rows))
+	if len(r.Rows) != 6 {
+		t.Fatalf("rows = %d, want 6", len(r.Rows))
 	}
 
 	// Verify all type rows.
@@ -27,6 +27,7 @@ func TestCatalog_SelectStar(t *testing.T) {
 		{"16", "bool"},
 		{"20", "int8"},
 		{"25", "text"},
+		{"1184", "timestamptz"},
 		{"9900", "geometry"},
 		{"9901", "geography"},
 	}
@@ -53,8 +54,8 @@ func TestCatalog_SelectSpecificColumns(t *testing.T) {
 	if r.Columns[1].Name != "typname" {
 		t.Errorf("col[1] = %q, want typname", r.Columns[1].Name)
 	}
-	if len(r.Rows) != 5 {
-		t.Fatalf("rows = %d, want 5", len(r.Rows))
+	if len(r.Rows) != 6 {
+		t.Fatalf("rows = %d, want 6", len(r.Rows))
 	}
 }
 
@@ -89,8 +90,8 @@ func TestCatalog_CountStar(t *testing.T) {
 	if len(r.Rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(r.Rows))
 	}
-	if string(r.Rows[0][0]) != "5" {
-		t.Errorf("count = %q, want 5", r.Rows[0][0])
+	if string(r.Rows[0][0]) != "6" {
+		t.Errorf("count = %q, want 6", r.Rows[0][0])
 	}
 }
 
@@ -168,8 +169,8 @@ func TestCatalog_QualifiedPGType(t *testing.T) {
 	if len(r.Columns) != 2 {
 		t.Fatalf("columns = %d, want 2", len(r.Columns))
 	}
-	if len(r.Rows) != 5 {
-		t.Fatalf("rows = %d, want 5", len(r.Rows))
+	if len(r.Rows) != 6 {
+		t.Fatalf("rows = %d, want 6", len(r.Rows))
 	}
 }
 

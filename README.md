@@ -45,7 +45,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
 - **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `VERSION()`, and a registration pattern for adding more
-- **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
+- **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, TIMESTAMP (UTC), NULL
 - **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
 - **Pattern matching** — `LIKE` / `NOT LIKE` (case-sensitive), `ILIKE` / `NOT ILIKE` (case-insensitive, PostgreSQL extension); `%` matches zero or more characters, `_` matches exactly one Unicode codepoint; `ESCAPE` clause for literal `%`/`_`; NULL propagation
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `LIKE` / `ILIKE`, `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
@@ -207,7 +207,17 @@ String comparison is **binary** (byte-order). There is no locale-aware collation
 | `INTEGER` | `int64` | 64-bit signed integer (aliases: `INT`, `SMALLINT`, `BIGINT`) |
 | `TEXT` | `string` | Variable-length UTF-8 string |
 | `BOOLEAN` | `bool` | `TRUE` or `FALSE` |
+| `TIMESTAMP` | `time.Time` | UTC timestamp with microsecond precision (aliases: `TIMESTAMPTZ`, `TIMESTAMP WITH TIME ZONE`) |
 | `NULL` | `nil` | Absence of a value (any column) |
+
+**TIMESTAMP details.** All timestamps are stored as UTC — there is no timezone configuration or session timezone. Input strings with timezone offsets are converted to UTC on insert. Accepted input formats:
+
+- `'2024-01-15 10:30:00'` — assumed UTC
+- `'2024-01-15T10:30:00Z'` — ISO 8601
+- `'2024-01-15T10:30:00+02:00'` — converted to UTC
+- `'2024-01-15'` — midnight UTC
+
+Output format is always `2024-01-15 10:30:00+00`. The `NOW()` function returns the current UTC timestamp.
 
 ### Aggregate Functions
 
@@ -218,8 +228,8 @@ Aggregate functions collapse all matching rows into a single result row. Multipl
 | `COUNT(*)` | — | `INTEGER` | Count of all rows |
 | `COUNT(col)` | any column | `INTEGER` | Count of non-NULL values in `col` |
 | `SUM(col)` | `INTEGER` column | `INTEGER` | Sum of all non-NULL values |
-| `MIN(col)` | `INTEGER` or `TEXT` column | same as `col` | Smallest non-NULL value |
-| `MAX(col)` | `INTEGER` or `TEXT` column | same as `col` | Largest non-NULL value |
+| `MIN(col)` | `INTEGER`, `TEXT`, or `TIMESTAMP` column | same as `col` | Smallest non-NULL value |
+| `MAX(col)` | `INTEGER`, `TEXT`, or `TIMESTAMP` column | same as `col` | Largest non-NULL value |
 
 Function names are case-insensitive (`sum`, `Sum`, `SUM` all work).
 
@@ -479,6 +489,7 @@ Scalar functions return a single value per row. They can be used in `SELECT` col
 | `CHAR_LENGTH(text)` | 1 TEXT | `INTEGER` | SQL-standard alias for `LENGTH()` |
 | `OCTET_LENGTH(text)` | 1 TEXT | `INTEGER` | Number of bytes (UTF-8 encoded length) |
 | `CONCAT(arg, ...)` | 1+ any | `TEXT` | Concatenates all arguments as text; NULLs are skipped (treated as empty string); never returns NULL |
+| `NOW()` | 0 | `TIMESTAMP` | Current UTC timestamp |
 | `VERSION()` | 0 | `TEXT` | PostgreSQL-compatible version string identifying the mulldb build |
 
 Function names are case-insensitive. NULL input returns NULL.
@@ -820,6 +831,7 @@ mulldb/
 │   ├── scalar.go           Scalar function registry and static SELECT evaluation
 │   ├── fn_concat.go        CONCAT() implementation (registers via init())
 │   ├── fn_length.go        LENGTH() / CHARACTER_LENGTH() / CHAR_LENGTH() (registers via init())
+│   ├── fn_now.go           NOW() implementation (registers via init())
 │   ├── fn_version.go       VERSION() implementation (registers via init())
 │   ├── result.go           Result types, QueryError, SQLSTATE mapping
 │   └── executor_test.go
@@ -832,6 +844,7 @@ mulldb/
     ├── catalog.go          In-memory table schema management
     ├── heap.go             In-memory row storage per table
     ├── compare.go          Type-aware value comparison
+    ├── timestamp.go        Timestamp parsing and type coercion
     ├── wal.go              Write-ahead log (write, replay, checksums)
     ├── wal_migrate.go      WAL format + split-WAL migration framework
     ├── wal_test.go         WAL migration tests

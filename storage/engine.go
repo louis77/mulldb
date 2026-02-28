@@ -476,7 +476,11 @@ func (e *engine) Update(table string, sets map[string]any, filter func(Row) bool
 			}
 			newValues[idx] = newVal
 		}
-		updates = append(updates, rowUpdate{RowID: id, Values: newValues})
+		coerced, err := coerceRowValues(&heap.def, newValues)
+		if err != nil {
+			return 0, err
+		}
+		updates = append(updates, rowUpdate{RowID: id, Values: coerced})
 	}
 
 	if len(updates) == 0 {
@@ -615,7 +619,7 @@ func resolveInsertRow(heap *tableHeap, columns []string, values []any) ([]any, e
 		if len(values) != len(def.Columns) {
 			return nil, &ValueCountError{Expected: len(def.Columns), Got: len(values)}
 		}
-		return values, nil
+		return coerceRowValues(def, values)
 	}
 
 	row := make([]any, len(def.Columns))
@@ -629,7 +633,7 @@ func resolveInsertRow(heap *tableHeap, columns []string, values []any) ([]any, e
 		}
 		row[idx] = values[i]
 	}
-	return row, nil
+	return coerceRowValues(def, row)
 }
 
 // migrateLegacyWALVersion checks whether the legacy wal.dat file needs a

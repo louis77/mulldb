@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"mulldb/parser"
 )
@@ -21,6 +22,8 @@ func coerceToText(v any) (string, bool) {
 			return "true", true
 		}
 		return "false", true
+	case time.Time:
+		return x.Format("2006-01-02 15:04:05+00"), true
 	default:
 		return "", false
 	}

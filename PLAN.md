@@ -13,7 +13,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
 | SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). Double-quoted identifiers for reserved words and case preservation. |
-| Data types | `INTEGER`, `TEXT`, `BOOLEAN` |
+| Data types | `INTEGER`, `TEXT`, `BOOLEAN`, `TIMESTAMP` (UTC-only) |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
 | Concurrency | Per-table locking: concurrent writes to independent tables, multi-reader per table |

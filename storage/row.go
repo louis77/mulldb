@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 // Value encoding: 1-byte type tag followed by type-specific data.
@@ -12,10 +13,11 @@ import (
 //	tagText    (2): uint16 length + bytes
 //	tagBoolean (3): 1 byte (0=false, 1=true)
 const (
-	tagNull    byte = 0
-	tagInteger byte = 1
-	tagText    byte = 2
-	tagBoolean byte = 3
+	tagNull      byte = 0
+	tagInteger   byte = 1
+	tagText      byte = 2
+	tagBoolean   byte = 3
+	tagTimestamp byte = 4
 )
 
 // encodeValue appends the binary encoding of v to buf.
@@ -36,6 +38,10 @@ func encodeValue(buf []byte, v any) []byte {
 			return append(buf, 1)
 		}
 		return append(buf, 0)
+	case time.Time:
+		buf = append(buf, tagTimestamp)
+		usec := val.UnixMicro()
+		return binary.BigEndian.AppendUint64(buf, uint64(usec))
 	default:
 		// Treat unknown types as NULL.
 		return append(buf, tagNull)
@@ -75,6 +81,12 @@ func decodeValue(data []byte) (any, []byte, error) {
 			return nil, nil, fmt.Errorf("truncated boolean value")
 		}
 		return data[0] != 0, data[1:], nil
+	case tagTimestamp:
+		if len(data) < 8 {
+			return nil, nil, fmt.Errorf("truncated timestamp value")
+		}
+		usec := int64(binary.BigEndian.Uint64(data[:8]))
+		return time.UnixMicro(usec).UTC(), data[8:], nil
 	default:
 		return nil, nil, fmt.Errorf("unknown value tag %d", tag)
 	}
