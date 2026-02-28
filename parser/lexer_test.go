@@ -277,3 +277,31 @@ func TestLexerCommentBlockMultiline(t *testing.T) {
 		t.Fatalf("expected INT 1, got %s %q", tok.Type, tok.Literal)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Concatenation operator tests
+// ---------------------------------------------------------------------------
+
+func TestLexerConcatOperator(t *testing.T) {
+	l := NewLexer("'a' || 'b'")
+	tok := l.NextToken()
+	if tok.Type != TokenStrLit || tok.Literal != "a" {
+		t.Fatalf("expected STRING 'a', got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenConcat || tok.Literal != "||" {
+		t.Fatalf("expected || operator, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenStrLit || tok.Literal != "b" {
+		t.Fatalf("expected STRING 'b', got %s %q", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexerSinglePipeIllegal(t *testing.T) {
+	l := NewLexer("|")
+	tok := l.NextToken()
+	if tok.Type != TokenIllegal || tok.Literal != "|" {
+		t.Fatalf("expected ILLEGAL '|', got %s %q", tok.Type, tok.Literal)
+	}
+}

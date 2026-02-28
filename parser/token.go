@@ -34,6 +34,7 @@ const (
 	TokenMinus     // -
 	TokenSlash     // /
 	TokenPercent   // %
+	TokenConcat    // ||
 
 	// Keywords.
 	TokenSelect
@@ -97,6 +98,7 @@ var tokenNames = map[TokenType]string{
 	TokenMinus:     "-",
 	TokenSlash:     "/",
 	TokenPercent:   "%",
+	TokenConcat:    "||",
 	TokenSelect:    "SELECT",
 	TokenFrom:      "FROM",
 	TokenWhere:     "WHERE",

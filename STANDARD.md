@@ -33,7 +33,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | E021-04 | CHARACTER_LENGTH function | **Done** (`LENGTH()`, `CHARACTER_LENGTH()`, `CHAR_LENGTH()`; counts Unicode code points; NULL returns NULL) |
 | E021-05 | OCTET_LENGTH function | **Done** (`OCTET_LENGTH()`; returns byte length of UTF-8 string; NULL returns NULL) |
 | E021-06 | SUBSTRING function | Open |
-| E021-07 | Character concatenation (`\|\|`) | Open |
+| E021-07 | Character concatenation (`\|\|`) | **Done** (`\|\|` operator; implicit coercion from INTEGER/BOOLEAN; NULL propagation per SQL standard) |
 | E021-08 | UPPER and LOWER functions | Open |
 | E021-09 | TRIM function | Open |
 | E021-10 | Implicit casting among character string types | Open (only one string type exists) |

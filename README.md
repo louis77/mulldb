@@ -19,6 +19,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
   - [INNER JOIN](#inner-join)
   - [LIMIT and OFFSET](#limit-and-offset)
   - [Arithmetic Expressions](#arithmetic-expressions)
+  - [String Concatenation](#string-concatenation)
   - [Scalar Functions](#scalar-functions)
   - [Catalog Tables](#catalog-tables)
   - [Statement Tracing](#statement-tracing)
@@ -42,7 +43,8 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **SQL support** — CREATE TABLE, DROP TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`
-- **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `VERSION()`, and a registration pattern for adding more
+- **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
+- **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `VERSION()`, and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), TEXT, BOOLEAN, NULL
 - **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
@@ -433,6 +435,38 @@ SELECT NULL + 1;  -- NULL (null propagation)
 SELECT 1 / 0;     -- ERROR: division by zero (SQLSTATE 22012)
 ```
 
+### String Concatenation
+
+The `||` operator concatenates two values into a text string. At least one operand must be TEXT; the other is implicitly coerced (integers become their decimal representation, booleans become `"true"` or `"false"`). Two non-text operands produce an error (SQLSTATE `42883`). If either operand is NULL, the result is NULL (SQL standard behavior).
+
+The `CONCAT()` function is an alternative that treats NULL as empty string — see [Scalar Functions](#scalar-functions).
+
+**Examples:**
+
+```sql
+SELECT 'hello' || ' ' || 'world';
+--  ?column?
+-- -------------
+--  hello world
+
+SELECT 'count: ' || 42;
+--  ?column?
+-- -----------
+--  count: 42
+
+SELECT 'active: ' || TRUE;
+--  ?column?
+-- ---------------
+--  active: true
+
+SELECT 'hello' || NULL;
+--  ?column?
+-- ----------
+--  (NULL)
+
+SELECT 1 || 2;  -- ERROR: operator || is not defined (42883)
+```
+
 ### Scalar Functions
 
 Scalar functions return a single value per row. They can be used in `SELECT` columns (with or without `FROM`) and in `WHERE` clauses.
@@ -443,6 +477,7 @@ Scalar functions return a single value per row. They can be used in `SELECT` col
 | `CHARACTER_LENGTH(text)` | 1 TEXT | `INTEGER` | SQL-standard alias for `LENGTH()` |
 | `CHAR_LENGTH(text)` | 1 TEXT | `INTEGER` | SQL-standard alias for `LENGTH()` |
 | `OCTET_LENGTH(text)` | 1 TEXT | `INTEGER` | Number of bytes (UTF-8 encoded length) |
+| `CONCAT(arg, ...)` | 1+ any | `TEXT` | Concatenates all arguments as text; NULLs are skipped (treated as empty string); never returns NULL |
 | `VERSION()` | 0 | `TEXT` | PostgreSQL-compatible version string identifying the mulldb build |
 
 Function names are case-insensitive. NULL input returns NULL.
@@ -574,6 +609,7 @@ SHOW TRACE;
 
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
 - **Arithmetic**: `+`, `-`, `*`, `/`, `%` (integer only)
+- **Concatenation**: `||` (text, with implicit coercion)
 - **Unary minus**: `-expr`
 - **NULL predicates**: `IS NULL`, `IS NOT NULL`
 - **Logical operators**: `AND`, `OR`, `NOT`
@@ -592,7 +628,7 @@ SELECT * FROM t WHERE NOT (x > 5);        -- negate a comparison
 
 `NOT` on a NULL value yields NULL (the row is excluded). `NOT` can be chained: `NOT NOT active`.
 
-Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / IS [NOT] NULL → `+` `-` → `*` `/` `%` → unary `-` → primary.
+Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / IS [NOT] NULL → `+` `-` `||` → `*` `/` `%` → unary `-` → primary.
 
 ### Comments
 
@@ -768,6 +804,7 @@ mulldb/
 ├── executor/
 │   ├── executor.go         Query execution (AST → storage → results)
 │   ├── scalar.go           Scalar function registry and static SELECT evaluation
+│   ├── fn_concat.go        CONCAT() implementation (registers via init())
 │   ├── fn_length.go        LENGTH() / CHARACTER_LENGTH() / CHAR_LENGTH() (registers via init())
 │   ├── fn_version.go       VERSION() implementation (registers via init())
 │   ├── result.go           Result types, QueryError, SQLSTATE mapping

@@ -1825,3 +1825,145 @@ func TestExecuteTraced_JoinNoOrderBy(t *testing.T) {
 		t.Error("Sort duration should be zero when no ORDER BY")
 	}
 }
+
+// -------------------------------------------------------------------------
+// Concatenation operator ||
+// -------------------------------------------------------------------------
+
+func TestConcatOperator_Static(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 'hello' || ' ' || 'world'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	got := string(r.Rows[0][0])
+	if got != "hello world" {
+		t.Errorf("got %q, want %q", got, "hello world")
+	}
+}
+
+func TestConcatOperator_NullPropagation(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 'hello' || NULL")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if r.Rows[0][0] != nil {
+		t.Errorf("expected NULL, got %q", string(r.Rows[0][0]))
+	}
+}
+
+func TestConcatOperator_IntCoercion(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 'count: ' || 42")
+	got := string(r.Rows[0][0])
+	if got != "count: 42" {
+		t.Errorf("got %q, want %q", got, "count: 42")
+	}
+}
+
+func TestConcatOperator_BoolCoercion(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 'active: ' || TRUE")
+	got := string(r.Rows[0][0])
+	if got != "active: true" {
+		t.Errorf("got %q, want %q", got, "active: true")
+	}
+}
+
+func TestConcatOperator_BothIntegersError(t *testing.T) {
+	e := setup(t)
+	_, err := e.Execute("SELECT 1 || 2")
+	if err == nil {
+		t.Fatal("expected error for integer || integer")
+	}
+	qe, ok := err.(*QueryError)
+	if !ok {
+		t.Fatalf("expected *QueryError, got %T", err)
+	}
+	if qe.Code != "42883" {
+		t.Errorf("SQLSTATE = %q, want 42883", qe.Code)
+	}
+}
+
+func TestConcatOperator_FromTable(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE greetings (greeting TEXT, name TEXT)")
+	exec(t, e, "INSERT INTO greetings (greeting, name) VALUES ('Hello', 'World')")
+	r := exec(t, e, "SELECT greeting || ' ' || name FROM greetings")
+	got := string(r.Rows[0][0])
+	if got != "Hello World" {
+		t.Errorf("got %q, want %q", got, "Hello World")
+	}
+}
+
+func TestConcatOperator_InWhere(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE words (a TEXT, b TEXT)")
+	exec(t, e, "INSERT INTO words (a, b) VALUES ('foo', 'bar')")
+	exec(t, e, "INSERT INTO words (a, b) VALUES ('hello', 'world')")
+	r := exec(t, e, "SELECT a FROM words WHERE a || b = 'foobar'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "foo" {
+		t.Errorf("got %q, want %q", string(r.Rows[0][0]), "foo")
+	}
+}
+
+func TestConcatOperator_InInsert(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE msgs (msg TEXT)")
+	exec(t, e, "INSERT INTO msgs (msg) VALUES ('hello' || ' ' || 'world')")
+	r := exec(t, e, "SELECT msg FROM msgs")
+	got := string(r.Rows[0][0])
+	if got != "hello world" {
+		t.Errorf("got %q, want %q", got, "hello world")
+	}
+}
+
+func TestConcatOperator_InUpdate(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE msgs (msg TEXT)")
+	exec(t, e, "INSERT INTO msgs (msg) VALUES ('hello')")
+	exec(t, e, "UPDATE msgs SET msg = 'hello' || ' world'")
+	r := exec(t, e, "SELECT msg FROM msgs")
+	got := string(r.Rows[0][0])
+	if got != "hello world" {
+		t.Errorf("got %q, want %q", got, "hello world")
+	}
+}
+
+func TestConcatOperator_Join(t *testing.T) {
+	e := setup(t)
+	setupJoinTables(t, e)
+	r := exec(t, e, "SELECT o.customer || ':' || i.product FROM orders o JOIN items i ON o.id = i.order_id ORDER BY i.id")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+	want := []string{"alice:widget", "alice:gadget", "bob:widget"}
+	for i, w := range want {
+		got := string(r.Rows[i][0])
+		if got != w {
+			t.Errorf("row[%d] = %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestConcatOperator_ColumnMetadata(t *testing.T) {
+	e := setup(t)
+	r := exec(t, e, "SELECT 'a' || 'b'")
+	if r.Columns[0].TypeOID != OIDText {
+		t.Errorf("TypeOID = %d, want %d (OIDText)", r.Columns[0].TypeOID, OIDText)
+	}
+}
+
+func TestConcatOperator_ColumnMetadataFromTable(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (a TEXT)")
+	exec(t, e, "INSERT INTO t (a) VALUES ('x')")
+	r := exec(t, e, "SELECT a || 'y' FROM t")
+	if r.Columns[0].TypeOID != OIDText {
+		t.Errorf("TypeOID = %d, want %d (OIDText)", r.Columns[0].TypeOID, OIDText)
+	}
+}

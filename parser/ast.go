@@ -169,7 +169,7 @@ type UnaryExpr struct {
 }
 
 // BinaryExpr is a binary operation: left op right.
-// Op is one of: "=", "!=", "<", ">", "<=", ">=", "AND", "OR", "+", "-", "*", "/", "%".
+// Op is one of: "=", "!=", "<", ">", "<=", ">=", "AND", "OR", "+", "-", "*", "/", "%", "||".
 type BinaryExpr struct {
 	Left  Expr
 	Op    string

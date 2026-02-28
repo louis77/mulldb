@@ -607,10 +607,15 @@ func (p *parser) parseAdditive() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	for p.cur.Type == TokenPlus || p.cur.Type == TokenMinus {
-		op := "+"
-		if p.cur.Type == TokenMinus {
+	for p.cur.Type == TokenPlus || p.cur.Type == TokenMinus || p.cur.Type == TokenConcat {
+		var op string
+		switch p.cur.Type {
+		case TokenPlus:
+			op = "+"
+		case TokenMinus:
 			op = "-"
+		case TokenConcat:
+			op = "||"
 		}
 		p.next()
 		right, err := p.parseMultiplicative()
@@ -699,18 +704,24 @@ func (p *parser) parsePrimary() (Expr, error) {
 		if p.cur.Type != TokenLParen {
 			return &ColumnRef{Name: name}, nil
 		}
-		// function call: NAME(...)
+		// function call: NAME(arg, arg, ...)
 		p.next() // consume (
 		var args []Expr
 		if p.cur.Type == TokenStar {
 			args = []Expr{&StarExpr{}}
 			p.next()
 		} else if p.cur.Type != TokenRParen {
-			arg, err := p.parseExpr()
-			if err != nil {
-				return nil, err
+			for {
+				arg, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+				if p.cur.Type != TokenComma {
+					break
+				}
+				p.next() // consume comma
 			}
-			args = []Expr{arg}
 		}
 		if _, err := p.expect(TokenRParen); err != nil {
 			return nil, err

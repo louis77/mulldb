@@ -1564,3 +1564,70 @@ func TestParse_MultiJoin(t *testing.T) {
 		t.Errorf("join[1] table = %q, want t3", sel.Joins[1].Table.Name)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Concatenation operator ||
+// ---------------------------------------------------------------------------
+
+func TestParse_ConcatOperator(t *testing.T) {
+	stmt, err := Parse("SELECT 'a' || 'b'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Columns) != 1 {
+		t.Fatalf("columns = %d, want 1", len(sel.Columns))
+	}
+	bin, ok := sel.Columns[0].(*BinaryExpr)
+	if !ok {
+		t.Fatalf("got %T, want *BinaryExpr", sel.Columns[0])
+	}
+	if bin.Op != "||" {
+		t.Errorf("op = %q, want ||", bin.Op)
+	}
+}
+
+func TestParse_ConcatChained(t *testing.T) {
+	stmt, err := Parse("SELECT 'a' || 'b' || 'c'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	// Should be left-associative: (('a' || 'b') || 'c')
+	outer, ok := sel.Columns[0].(*BinaryExpr)
+	if !ok {
+		t.Fatalf("got %T, want *BinaryExpr", sel.Columns[0])
+	}
+	if outer.Op != "||" {
+		t.Errorf("outer op = %q, want ||", outer.Op)
+	}
+	inner, ok := outer.Left.(*BinaryExpr)
+	if !ok {
+		t.Fatalf("left = %T, want *BinaryExpr", outer.Left)
+	}
+	if inner.Op != "||" {
+		t.Errorf("inner op = %q, want ||", inner.Op)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-arg function calls
+// ---------------------------------------------------------------------------
+
+func TestParse_MultiArgFunction(t *testing.T) {
+	stmt, err := Parse("SELECT CONCAT('a', 'b', 'c')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	fn, ok := sel.Columns[0].(*FunctionCallExpr)
+	if !ok {
+		t.Fatalf("got %T, want *FunctionCallExpr", sel.Columns[0])
+	}
+	if fn.Name != "CONCAT" {
+		t.Errorf("name = %q, want CONCAT", fn.Name)
+	}
+	if len(fn.Args) != 3 {
+		t.Fatalf("args = %d, want 3", len(fn.Args))
+	}
+}

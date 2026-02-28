@@ -2,10 +2,29 @@ package executor
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"mulldb/parser"
 )
+
+// coerceToText converts a Go value to its text representation.
+// Returns the string and true on success, or "" and false for unsupported types.
+func coerceToText(v any) (string, bool) {
+	switch x := v.(type) {
+	case string:
+		return x, true
+	case int64:
+		return strconv.FormatInt(x, 10), true
+	case bool:
+		if x {
+			return "true", true
+		}
+		return "false", true
+	default:
+		return "", false
+	}
+}
 
 // ScalarFunc is the signature all registered scalar functions must implement.
 // args contains pre-evaluated argument values (nil = SQL NULL).
@@ -76,6 +95,31 @@ func evalStaticBinaryExpr(e *parser.BinaryExpr) (any, Column, error) {
 	if err != nil {
 		return nil, Column{}, err
 	}
+
+	if e.Op == "||" {
+		col := Column{Name: "?column?", TypeOID: OIDText, TypeSize: -1}
+		if lv == nil || rv == nil {
+			return nil, col, nil
+		}
+		_, lIsStr := lv.(string)
+		_, rIsStr := rv.(string)
+		if !lIsStr && !rIsStr {
+			return nil, Column{}, &QueryError{
+				Code:    "42883",
+				Message: "operator || is not defined for the given types",
+			}
+		}
+		ls, lok := coerceToText(lv)
+		rs, rok := coerceToText(rv)
+		if !lok || !rok {
+			return nil, Column{}, &QueryError{
+				Code:    "42883",
+				Message: "operator || is not defined for the given types",
+			}
+		}
+		return ls + rs, col, nil
+	}
+
 	col := Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}
 	if lv == nil || rv == nil {
 		return nil, col, nil

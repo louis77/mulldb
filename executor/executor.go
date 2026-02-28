@@ -990,6 +990,24 @@ func compileJoinBinaryExpr(e *parser.BinaryExpr, scope *joinScope) (exprFunc, er
 			}
 			return c >= 0
 		}, nil
+	case "||":
+		return func(r storage.Row) any {
+			lv, rv := left(r), right(r)
+			if lv == nil || rv == nil {
+				return nil
+			}
+			_, lIsStr := lv.(string)
+			_, rIsStr := rv.(string)
+			if !lIsStr && !rIsStr {
+				return nil
+			}
+			ls, lok := coerceToText(lv)
+			rs, rok := coerceToText(rv)
+			if !lok || !rok {
+				return nil
+			}
+			return ls + rs
+		}, nil
 	case "+", "-", "*", "/", "%":
 		op := e.Op
 		return func(r storage.Row) any {
@@ -1081,6 +1099,21 @@ func resolveJoinSelectColumns(exprs []parser.Expr, scope *joinScope) ([]exprFunc
 				TypeOID:  typeOID(c.def.DataType),
 				TypeSize: typeSize(c.def.DataType),
 			})
+		case *parser.BinaryExpr:
+			compiled, err := compileJoinExpr(inner, scope)
+			if err != nil {
+				return nil, nil, err
+			}
+			evals = append(evals, compiled)
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			if e.Op == "||" {
+				cols = append(cols, Column{Name: name, TypeOID: OIDText, TypeSize: -1})
+			} else {
+				cols = append(cols, Column{Name: name, TypeOID: OIDInt8, TypeSize: 8})
+			}
 		default:
 			compiled, err := compileJoinExpr(inner, scope)
 			if err != nil {
@@ -1506,6 +1539,21 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 				col.Name = alias
 			}
 			cols = append(cols, col)
+		case *parser.BinaryExpr:
+			compiled, err := compileExpr(e, def)
+			if err != nil {
+				return nil, nil, err
+			}
+			evals = append(evals, compiled)
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			if e.Op == "||" {
+				cols = append(cols, Column{Name: name, TypeOID: OIDText, TypeSize: -1})
+			} else {
+				cols = append(cols, Column{Name: name, TypeOID: OIDInt8, TypeSize: 8})
+			}
 		default:
 			compiled, err := compileExpr(inner, def)
 			if err != nil {
@@ -1715,6 +1763,24 @@ func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, e
 				return nil
 			}
 			return c >= 0
+		}, nil
+	case "||":
+		return func(r storage.Row) any {
+			lv, rv := left(r), right(r)
+			if lv == nil || rv == nil {
+				return nil
+			}
+			_, lIsStr := lv.(string)
+			_, rIsStr := rv.(string)
+			if !lIsStr && !rIsStr {
+				return nil
+			}
+			ls, lok := coerceToText(lv)
+			rs, rok := coerceToText(rv)
+			if !lok || !rok {
+				return nil
+			}
+			return ls + rs
 		}, nil
 	case "+", "-", "*", "/", "%":
 		op := e.Op

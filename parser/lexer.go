@@ -80,6 +80,14 @@ func (l *Lexer) NextToken() Token {
 	case l.ch == '%':
 		l.advance()
 		return Token{Type: TokenPercent, Literal: "%", Pos: start}
+	case l.ch == '|':
+		if l.peek() == '|' {
+			l.advance()
+			l.advance()
+			return Token{Type: TokenConcat, Literal: "||", Pos: start}
+		}
+		l.advance()
+		return Token{Type: TokenIllegal, Literal: "|", Pos: start}
 	case l.ch == '=':
 		l.advance()
 		return Token{Type: TokenEq, Literal: "=", Pos: start}
