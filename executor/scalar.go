@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ func coerceToText(v any) (string, bool) {
 		return x, true
 	case int64:
 		return strconv.FormatInt(x, 10), true
+	case float64:
+		return strconv.FormatFloat(x, 'g', -1, 64), true
 	case bool:
 		if x {
 			return "true", true
@@ -46,6 +49,8 @@ func evalStaticExpr(expr parser.Expr) (any, Column, error) {
 	switch e := expr.(type) {
 	case *parser.IntegerLit:
 		return e.Value, Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}, nil
+	case *parser.FloatLit:
+		return e.Value, Column{Name: "?column?", TypeOID: OIDFloat8, TypeSize: 8}, nil
 	case *parser.StringLit:
 		return e.Value, Column{Name: "?column?", TypeOID: OIDText, TypeSize: -1}, nil
 	case *parser.BoolLit:
@@ -123,35 +128,67 @@ func evalStaticBinaryExpr(e *parser.BinaryExpr) (any, Column, error) {
 		return ls + rs, col, nil
 	}
 
-	col := Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}
 	if lv == nil || rv == nil {
-		return nil, col, nil
+		return nil, Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}, nil
 	}
+
+	// Try integer arithmetic first.
 	li, lok := lv.(int64)
 	ri, rok := rv.(int64)
-	if !lok || !rok {
+	if lok && rok {
+		col := Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}
+		switch e.Op {
+		case "+":
+			return li + ri, col, nil
+		case "-":
+			return li - ri, col, nil
+		case "*":
+			return li * ri, col, nil
+		case "/":
+			if ri == 0 {
+				return nil, Column{}, &QueryError{Code: "22012", Message: "division by zero"}
+			}
+			return li / ri, col, nil
+		case "%":
+			if ri == 0 {
+				return nil, Column{}, &QueryError{Code: "22012", Message: "division by zero"}
+			}
+			return li % ri, col, nil
+		default:
+			return nil, Column{}, &QueryError{
+				Code:    "42601",
+				Message: fmt.Sprintf("operator %q not supported in static context", e.Op),
+			}
+		}
+	}
+
+	// Fall back to float arithmetic with int→float promotion.
+	lf, lfOk := toFloat64(lv)
+	rf, rfOk := toFloat64(rv)
+	if !lfOk || !rfOk {
 		return nil, Column{}, &QueryError{
 			Code:    "42883",
 			Message: fmt.Sprintf("operator %s is not defined for the given types", e.Op),
 		}
 	}
+	col := Column{Name: "?column?", TypeOID: OIDFloat8, TypeSize: 8}
 	switch e.Op {
 	case "+":
-		return li + ri, col, nil
+		return lf + rf, col, nil
 	case "-":
-		return li - ri, col, nil
+		return lf - rf, col, nil
 	case "*":
-		return li * ri, col, nil
+		return lf * rf, col, nil
 	case "/":
-		if ri == 0 {
+		if rf == 0 {
 			return nil, Column{}, &QueryError{Code: "22012", Message: "division by zero"}
 		}
-		return li / ri, col, nil
+		return lf / rf, col, nil
 	case "%":
-		if ri == 0 {
+		if rf == 0 {
 			return nil, Column{}, &QueryError{Code: "22012", Message: "division by zero"}
 		}
-		return li % ri, col, nil
+		return math.Mod(lf, rf), col, nil
 	default:
 		return nil, Column{}, &QueryError{
 			Code:    "42601",
@@ -165,16 +202,18 @@ func evalStaticUnaryExpr(e *parser.UnaryExpr) (any, Column, error) {
 	if err != nil {
 		return nil, Column{}, err
 	}
-	col := Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}
 	if v == nil {
-		return nil, col, nil
+		return nil, Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}, nil
 	}
-	iv, ok := v.(int64)
-	if !ok {
+	switch n := v.(type) {
+	case int64:
+		return -n, Column{Name: "?column?", TypeOID: OIDInt8, TypeSize: 8}, nil
+	case float64:
+		return -n, Column{Name: "?column?", TypeOID: OIDFloat8, TypeSize: 8}, nil
+	default:
 		return nil, Column{}, &QueryError{
 			Code:    "42883",
 			Message: "unary minus is not defined for the given type",
 		}
 	}
-	return -iv, col, nil
 }

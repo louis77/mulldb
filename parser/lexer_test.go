@@ -305,3 +305,59 @@ func TestLexerSinglePipeIllegal(t *testing.T) {
 		t.Fatalf("expected ILLEGAL '|', got %s %q", tok.Type, tok.Literal)
 	}
 }
+
+func TestLexerFloatLiterals(t *testing.T) {
+	tests := []struct {
+		input string
+		typ   TokenType
+		lit   string
+	}{
+		{"3.14", TokenFloatLit, "3.14"},
+		{".5", TokenFloatLit, ".5"},
+		{"1e10", TokenFloatLit, "1e10"},
+		{"2.5e-3", TokenFloatLit, "2.5e-3"},
+		{"1E5", TokenFloatLit, "1E5"},
+		{"3.0E+2", TokenFloatLit, "3.0E+2"},
+		{"42", TokenIntLit, "42"},   // stays integer
+		{"0", TokenIntLit, "0"},     // stays integer
+	}
+	for _, tt := range tests {
+		l := NewLexer(tt.input)
+		tok := l.NextToken()
+		if tok.Type != tt.typ || tok.Literal != tt.lit {
+			t.Errorf("input %q: got %s %q, want %s %q",
+				tt.input, tok.Type, tok.Literal, tt.typ, tt.lit)
+		}
+	}
+}
+
+func TestLexerFloatLiteralVsDot(t *testing.T) {
+	// "t.col" should be IDENT DOT IDENT, not mistaken for float.
+	l := NewLexer("t.col")
+	tok := l.NextToken()
+	if tok.Type != TokenIdent || tok.Literal != "t" {
+		t.Fatalf("expected IDENT 't', got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenDot {
+		t.Fatalf("expected DOT, got %s %q", tok.Type, tok.Literal)
+	}
+	tok = l.NextToken()
+	if tok.Type != TokenIdent || tok.Literal != "col" {
+		t.Fatalf("expected IDENT 'col', got %s %q", tok.Type, tok.Literal)
+	}
+}
+
+func TestLexerFloatKeywords(t *testing.T) {
+	l := NewLexer("FLOAT")
+	tok := l.NextToken()
+	if tok.Type != TokenFloatKW {
+		t.Errorf("FLOAT: got %s, want FLOAT keyword", tok.Type)
+	}
+
+	l = NewLexer("DOUBLE")
+	tok = l.NextToken()
+	if tok.Type != TokenDoubleKW {
+		t.Errorf("DOUBLE: got %s, want DOUBLE keyword", tok.Type)
+	}
+}

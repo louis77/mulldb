@@ -163,6 +163,11 @@ type IntegerLit struct {
 	Value int64
 }
 
+// FloatLit is a floating-point literal.
+type FloatLit struct {
+	Value float64
+}
+
 // StringLit is a single-quoted string literal.
 type StringLit struct {
 	Value string
@@ -232,6 +237,7 @@ type InExpr struct {
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
+func (*FloatLit) exprNode()          {}
 func (*StringLit) exprNode()         {}
 func (*BoolLit) exprNode()           {}
 func (*NullLit) exprNode()           {}

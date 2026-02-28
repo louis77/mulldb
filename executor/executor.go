@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -571,6 +572,7 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		inputType storage.DataType
 		count     int64
 		sumI      int64
+		sumF      float64
 		minV      any
 		maxV      any
 		hasV      bool
@@ -609,8 +611,8 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 			if acc.colIdx < 0 {
 				return nil, &QueryError{Code: "42883", Message: "SUM requires a column argument"}
 			}
-			if acc.inputType != storage.TypeInteger {
-				return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("SUM: column must be INTEGER, got %s", acc.inputType)}
+			if acc.inputType != storage.TypeInteger && acc.inputType != storage.TypeFloat {
+				return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("SUM: column must be INTEGER or FLOAT, got %s", acc.inputType)}
 			}
 		case "MIN", "MAX":
 			if acc.colIdx < 0 {
@@ -670,8 +672,12 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 					acc.count++
 				}
 			case "SUM":
-				if v, ok := storage.RowValue(row.Values, acc.colIdx).(int64); ok {
+				val := storage.RowValue(row.Values, acc.colIdx)
+				switch v := val.(type) {
+				case int64:
 					acc.sumI += v
+				case float64:
+					acc.sumF += v
 				}
 			case "MIN":
 				v := storage.RowValue(row.Values, acc.colIdx)
@@ -702,7 +708,11 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		case "COUNT":
 			resultRow[i] = formatValue(acc.count)
 		case "SUM":
-			resultRow[i] = formatValue(acc.sumI)
+			if acc.inputType == storage.TypeFloat {
+				resultRow[i] = formatValue(acc.sumF)
+			} else {
+				resultRow[i] = formatValue(acc.sumI)
+			}
 		case "MIN":
 			resultRow[i] = formatValue(acc.minV)
 		case "MAX":
@@ -892,6 +902,10 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 		v := e.Value
 		return func(storage.Row) any { return v }, nil
 
+	case *parser.FloatLit:
+		v := e.Value
+		return func(storage.Row) any { return v }, nil
+
 	case *parser.StringLit:
 		v := e.Value
 		return func(storage.Row) any { return v }, nil
@@ -926,11 +940,14 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 			if v == nil {
 				return nil
 			}
-			iv, ok := v.(int64)
-			if !ok {
+			switch n := v.(type) {
+			case int64:
+				return -n
+			case float64:
+				return -n
+			default:
 				return nil
 			}
-			return -iv
 		}, nil
 
 	case *parser.NotExpr:
@@ -1088,28 +1105,53 @@ func compileJoinBinaryExpr(e *parser.BinaryExpr, scope *joinScope) (exprFunc, er
 			if lv == nil || rv == nil {
 				return nil
 			}
+			// Try integer arithmetic first.
 			li, lok := lv.(int64)
 			ri, rok := rv.(int64)
-			if !lok || !rok {
+			if lok && rok {
+				switch op {
+				case "+":
+					return li + ri
+				case "-":
+					return li - ri
+				case "*":
+					return li * ri
+				case "/":
+					if ri == 0 {
+						return nil
+					}
+					return li / ri
+				case "%":
+					if ri == 0 {
+						return nil
+					}
+					return li % ri
+				}
+				return nil
+			}
+			// Fall back to float arithmetic with int→float promotion.
+			lf, lfOk := toFloat64(lv)
+			rf, rfOk := toFloat64(rv)
+			if !lfOk || !rfOk {
 				return nil
 			}
 			switch op {
 			case "+":
-				return li + ri
+				return lf + rf
 			case "-":
-				return li - ri
+				return lf - rf
 			case "*":
-				return li * ri
+				return lf * rf
 			case "/":
-				if ri == 0 {
+				if rf == 0 {
 					return nil
 				}
-				return li / ri
+				return lf / rf
 			case "%":
-				if ri == 0 {
+				if rf == 0 {
 					return nil
 				}
-				return li % ri
+				return math.Mod(lf, rf)
 			}
 			return nil
 		}, nil
@@ -1572,6 +1614,14 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 				name = alias
 			}
 			cols = append(cols, Column{Name: name, TypeOID: OIDInt8, TypeSize: 8})
+		case *parser.FloatLit:
+			v := e.Value
+			evals = append(evals, func(r storage.Row) any { return v })
+			name := "?column?"
+			if alias != "" {
+				name = alias
+			}
+			cols = append(cols, Column{Name: name, TypeOID: OIDFloat8, TypeSize: 8})
 		case *parser.StringLit:
 			v := e.Value
 			evals = append(evals, func(r storage.Row) any { return v })
@@ -1676,6 +1726,10 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 		v := e.Value
 		return func(storage.Row) any { return v }, nil
 
+	case *parser.FloatLit:
+		v := e.Value
+		return func(storage.Row) any { return v }, nil
+
 	case *parser.StringLit:
 		v := e.Value
 		return func(storage.Row) any { return v }, nil
@@ -1710,11 +1764,14 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 			if v == nil {
 				return nil
 			}
-			iv, ok := v.(int64)
-			if !ok {
+			switch n := v.(type) {
+			case int64:
+				return -n
+			case float64:
+				return -n
+			default:
 				return nil
 			}
-			return -iv
 		}, nil
 
 	case *parser.NotExpr:
@@ -2005,28 +2062,53 @@ func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, e
 			if lv == nil || rv == nil {
 				return nil
 			}
+			// Try integer arithmetic first.
 			li, lok := lv.(int64)
 			ri, rok := rv.(int64)
-			if !lok || !rok {
+			if lok && rok {
+				switch op {
+				case "+":
+					return li + ri
+				case "-":
+					return li - ri
+				case "*":
+					return li * ri
+				case "/":
+					if ri == 0 {
+						return nil
+					}
+					return li / ri
+				case "%":
+					if ri == 0 {
+						return nil
+					}
+					return li % ri
+				}
+				return nil
+			}
+			// Fall back to float arithmetic with int→float promotion.
+			lf, lfOk := toFloat64(lv)
+			rf, rfOk := toFloat64(rv)
+			if !lfOk || !rfOk {
 				return nil
 			}
 			switch op {
 			case "+":
-				return li + ri
+				return lf + rf
 			case "-":
-				return li - ri
+				return lf - rf
 			case "*":
-				return li * ri
+				return lf * rf
 			case "/":
-				if ri == 0 {
-					return nil // division by zero handled at query level
-				}
-				return li / ri
-			case "%":
-				if ri == 0 {
+				if rf == 0 {
 					return nil
 				}
-				return li % ri
+				return lf / rf
+			case "%":
+				if rf == 0 {
+					return nil
+				}
+				return math.Mod(lf, rf)
 			}
 			return nil
 		}, nil
@@ -2121,6 +2203,8 @@ func evalLiteral(expr parser.Expr) (any, error) {
 	case *parser.BinaryExpr:
 		val, _, err := evalStaticExpr(e)
 		return val, err
+	case *parser.FloatLit:
+		return e.Value, nil
 	case *parser.UnaryExpr:
 		val, _, err := evalStaticExpr(e)
 		return val, err
@@ -2142,6 +2226,8 @@ func parseDataType(s string) (storage.DataType, error) {
 		return storage.TypeBoolean, nil
 	case "TIMESTAMP":
 		return storage.TypeTimestamp, nil
+	case "FLOAT":
+		return storage.TypeFloat, nil
 	default:
 		return 0, fmt.Errorf("unknown data type %q", s)
 	}
@@ -2168,7 +2254,12 @@ func columnByOrdinal(def *storage.TableDef, ordinal int) storage.ColumnDef {
 
 func aggregateTypeOID(funcName string, inputType storage.DataType) int32 {
 	switch funcName {
-	case "COUNT", "SUM":
+	case "COUNT":
+		return OIDInt8
+	case "SUM":
+		if inputType == storage.TypeFloat {
+			return OIDFloat8
+		}
 		return OIDInt8
 	case "MIN", "MAX":
 		return typeOID(inputType)
@@ -2180,7 +2271,7 @@ func aggregateTypeOID(funcName string, inputType storage.DataType) int32 {
 func aggregateTypeSize(funcName string, inputType storage.DataType) int16 {
 	switch funcName {
 	case "COUNT", "SUM":
-		return 8
+		return 8 // int64 and float64 are both 8 bytes
 	case "MIN", "MAX":
 		return typeSize(inputType)
 	default:
@@ -2198,6 +2289,8 @@ func typeOID(dt storage.DataType) int32 {
 		return OIDBool
 	case storage.TypeTimestamp:
 		return OIDTimestampTZ
+	case storage.TypeFloat:
+		return OIDFloat8
 	default:
 		return OIDUnknown
 	}
@@ -2210,6 +2303,8 @@ func typeSize(dt storage.DataType) int16 {
 	case storage.TypeBoolean:
 		return 1
 	case storage.TypeTimestamp:
+		return 8
+	case storage.TypeFloat:
 		return 8
 	default:
 		return -1 // variable length
@@ -2225,6 +2320,8 @@ func formatValue(v any) []byte {
 	switch val := v.(type) {
 	case int64:
 		return []byte(strconv.FormatInt(val, 10))
+	case float64:
+		return []byte(strconv.FormatFloat(val, 'g', -1, 64))
 	case string:
 		return []byte(val)
 	case bool:
@@ -2236,5 +2333,18 @@ func formatValue(v any) []byte {
 		return []byte(val.Format("2006-01-02 15:04:05+00"))
 	default:
 		return []byte(fmt.Sprintf("%v", v))
+	}
+}
+
+// toFloat64 converts a numeric value to float64.
+// Returns the float64 value and true on success.
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
 	}
 }

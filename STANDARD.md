@@ -15,11 +15,11 @@ Legend: **Done** = implemented, **Partial** = partially implemented, **Open** = 
 | ID | Feature | Status |
 |----|---------|--------|
 | E011-01 | INTEGER and SMALLINT data types | **Done** (INTEGER, INT, SMALLINT, BIGINT all accepted; stored as int64) |
-| E011-02 | REAL, DOUBLE PRECISION, and FLOAT data types | Open |
+| E011-02 | REAL, DOUBLE PRECISION, and FLOAT data types | **Done** (FLOAT and DOUBLE PRECISION accepted; stored as float64) |
 | E011-03 | DECIMAL and NUMERIC data types | Open |
-| E011-04 | Arithmetic operators | **Done** (`+`, `-`, `*`, `/`, `%` on integers; unary minus; NULL propagation; division by zero → SQLSTATE 22012) |
+| E011-04 | Arithmetic operators | **Done** (`+`, `-`, `*`, `/`, `%` on integers and floats; unary minus; implicit int→float promotion; NULL propagation; division by zero → SQLSTATE 22012) |
 | E011-05 | Numeric comparison | **Done** |
-| E011-06 | Implicit casting among numeric data types | Open (only one numeric type exists) |
+| E011-06 | Implicit casting among numeric data types | **Done** (implicit int64→float64 promotion in mixed arithmetic and comparisons) |
 
 ## E021 — Character string types
 
@@ -345,9 +345,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~43 |
+| **Done** | ~46 |
 | **Partial** | ~8 |
-| **Open** | ~126 |
+| **Open** | ~123 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
@@ -366,7 +366,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet
 5. **Transactions**: No BEGIN / COMMIT / ROLLBACK
-6. **Data types**: No floating-point, decimal, DATE, or TIME types (TIMESTAMP is done)
+6. **Data types**: No decimal, DATE, or TIME types (TIMESTAMP and FLOAT are done)
 7. **Constraints**: No UNIQUE, FOREIGN KEY, CHECK, DEFAULT
 8. **Subqueries**: No subquery support anywhere
 9. **UNION / EXCEPT**: No set operations

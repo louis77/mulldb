@@ -2427,6 +2427,282 @@ func TestExecutor_AlterTableWhereOnNewColumn(t *testing.T) {
 	}
 }
 
+// -------------------------------------------------------------------------
+// FLOAT data type tests
+// -------------------------------------------------------------------------
+
+func TestExecutor_FloatCreateInsertSelect(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER PRIMARY KEY, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, 3.14), (2, 2.718), (3, -1.5)")
+
+	r := exec(t, e, "SELECT * FROM m")
+	if len(r.Rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(r.Rows))
+	}
+	if string(r.Rows[0][1]) != "3.14" {
+		t.Errorf("row 0 value = %q, want 3.14", r.Rows[0][1])
+	}
+	if string(r.Rows[2][1]) != "-1.5" {
+		t.Errorf("row 2 value = %q, want -1.5", r.Rows[2][1])
+	}
+	// Verify column OID.
+	if r.Columns[1].TypeOID != OIDFloat8 {
+		t.Errorf("column OID = %d, want %d (OIDFloat8)", r.Columns[1].TypeOID, OIDFloat8)
+	}
+}
+
+func TestExecutor_FloatDoublePrecisionSyntax(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE dp (x DOUBLE PRECISION)")
+	exec(t, e, "INSERT INTO dp VALUES (1e10)")
+
+	r := exec(t, e, "SELECT * FROM dp")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "1e+10" {
+		t.Errorf("value = %q, want 1e+10", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatWhereFilter(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, 3.14), (2, 2.718), (3, -1.5)")
+
+	r := exec(t, e, "SELECT id FROM m WHERE value > 2.0")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_FloatArithmetic(t *testing.T) {
+	e := setup(t)
+
+	// Static float arithmetic.
+	r := exec(t, e, "SELECT 1.5 + 2.5")
+	if string(r.Rows[0][0]) != "4" {
+		t.Errorf("1.5 + 2.5 = %q, want 4", r.Rows[0][0])
+	}
+
+	// Mixed int + float.
+	r = exec(t, e, "SELECT 1 + 2.5")
+	if string(r.Rows[0][0]) != "3.5" {
+		t.Errorf("1 + 2.5 = %q, want 3.5", r.Rows[0][0])
+	}
+
+	// Float multiplication.
+	r = exec(t, e, "SELECT 2.0 * 3.0")
+	if string(r.Rows[0][0]) != "6" {
+		t.Errorf("2.0 * 3.0 = %q, want 6", r.Rows[0][0])
+	}
+
+	// Float division.
+	r = exec(t, e, "SELECT 7.0 / 2.0")
+	if string(r.Rows[0][0]) != "3.5" {
+		t.Errorf("7.0 / 2.0 = %q, want 3.5", r.Rows[0][0])
+	}
+
+	// Float modulo.
+	r = exec(t, e, "SELECT 7.5 % 2.0")
+	if string(r.Rows[0][0]) != "1.5" {
+		t.Errorf("7.5 %% 2.0 = %q, want 1.5", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatArithmeticWithColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, 3.0)")
+
+	r := exec(t, e, "SELECT value * 2 + 1 FROM m")
+	if string(r.Rows[0][0]) != "7" {
+		t.Errorf("value * 2 + 1 = %q, want 7", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatUnaryMinus(t *testing.T) {
+	e := setup(t)
+
+	r := exec(t, e, "SELECT -3.14")
+	if string(r.Rows[0][0]) != "-3.14" {
+		t.Errorf("-3.14 = %q, want -3.14", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatAggregates(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, 1.5), (2, 2.5), (3, 3.0)")
+
+	r := exec(t, e, "SELECT SUM(value) FROM m")
+	if string(r.Rows[0][0]) != "7" {
+		t.Errorf("SUM = %q, want 7", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT MIN(value) FROM m")
+	if string(r.Rows[0][0]) != "1.5" {
+		t.Errorf("MIN = %q, want 1.5", r.Rows[0][0])
+	}
+
+	r = exec(t, e, "SELECT MAX(value) FROM m")
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("MAX = %q, want 3", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatOrderBy(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, 3.14), (2, 1.0), (3, 2.718)")
+
+	r := exec(t, e, "SELECT id FROM m ORDER BY value ASC")
+	if len(r.Rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "2" || string(r.Rows[1][0]) != "3" || string(r.Rows[2][0]) != "1" {
+		t.Errorf("order = [%s, %s, %s], want [2, 3, 1]",
+			r.Rows[0][0], r.Rows[1][0], r.Rows[2][0])
+	}
+}
+
+func TestExecutor_FloatIntCoercionOnInsert(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (42)")
+
+	r := exec(t, e, "SELECT value FROM m")
+	if string(r.Rows[0][0]) != "42" {
+		t.Errorf("value = %q, want 42", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatStringCoercionOnInsert(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES ('3.14')")
+
+	r := exec(t, e, "SELECT value FROM m")
+	if string(r.Rows[0][0]) != "3.14" {
+		t.Errorf("value = %q, want 3.14", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatNullHandling(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, NULL), (2, 3.14)")
+
+	r := exec(t, e, "SELECT value FROM m WHERE value IS NULL")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if r.Rows[0][0] != nil {
+		t.Errorf("value = %q, want NULL", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatCompareIntVsFloat(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, 1.5), (2, 2.0), (3, 2.5)")
+
+	// Compare float column with integer literal.
+	r := exec(t, e, "SELECT id FROM m WHERE value > 2")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("id = %q, want 3", r.Rows[0][0])
+	}
+
+	// Compare float column with float literal — equality.
+	r = exec(t, e, "SELECT id FROM m WHERE value = 2.0")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "2" {
+		t.Errorf("id = %q, want 2", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatLiteralFormats(t *testing.T) {
+	e := setup(t)
+
+	// Scientific notation.
+	r := exec(t, e, "SELECT 1e3")
+	if string(r.Rows[0][0]) != "1000" {
+		t.Errorf("1e3 = %q, want 1000", r.Rows[0][0])
+	}
+
+	// Leading dot.
+	r = exec(t, e, "SELECT .5")
+	if string(r.Rows[0][0]) != "0.5" {
+		t.Errorf(".5 = %q, want 0.5", r.Rows[0][0])
+	}
+
+	// Scientific with negative exponent.
+	r = exec(t, e, "SELECT 2.5e-1")
+	if string(r.Rows[0][0]) != "0.25" {
+		t.Errorf("2.5e-1 = %q, want 0.25", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatDivisionByZeroError(t *testing.T) {
+	e := setup(t)
+
+	_, err := e.Execute("SELECT 1.0 / 0.0")
+	if err == nil {
+		t.Fatal("expected division by zero error")
+	}
+	var qe *QueryError
+	if !errors.As(err, &qe) || qe.Code != "22012" {
+		t.Errorf("expected SQLSTATE 22012, got %v", err)
+	}
+}
+
+func TestExecutor_FloatAlterTableAdd(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1)")
+	exec(t, e, "ALTER TABLE t ADD COLUMN val FLOAT")
+	exec(t, e, "INSERT INTO t (id, val) VALUES (2, 9.9)")
+
+	r := exec(t, e, "SELECT val FROM t ORDER BY id ASC")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+	// Row 1 was inserted before the column was added — should be NULL.
+	if r.Rows[0][0] != nil {
+		t.Errorf("row 0 val = %q, want NULL", r.Rows[0][0])
+	}
+	if string(r.Rows[1][0]) != "9.9" {
+		t.Errorf("row 1 val = %q, want 9.9", r.Rows[1][0])
+	}
+}
+
+func TestExecutor_FloatUpdate(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE m (id INTEGER, value FLOAT)")
+	exec(t, e, "INSERT INTO m VALUES (1, 3.14)")
+	exec(t, e, "UPDATE m SET value = 2.718 WHERE id = 1")
+
+	r := exec(t, e, "SELECT value FROM m")
+	if string(r.Rows[0][0]) != "2.718" {
+		t.Errorf("value = %q, want 2.718", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_FloatConcatCoercion(t *testing.T) {
+	e := setup(t)
+
+	r := exec(t, e, "SELECT 'pi=' || 3.14")
+	if string(r.Rows[0][0]) != "pi=3.14" {
+		t.Errorf("concat = %q, want pi=3.14", r.Rows[0][0])
+	}
+}
+
 func TestExecutor_AlterTableWALReplay(t *testing.T) {
 	dir := tempDir(t)
 

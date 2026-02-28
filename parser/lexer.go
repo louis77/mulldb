@@ -66,6 +66,9 @@ func (l *Lexer) NextToken() Token {
 		l.advance()
 		return Token{Type: TokenStar, Literal: "*", Pos: start}
 	case l.ch == '.':
+		if isDigit(l.peek()) {
+			return l.readNumber(start)
+		}
 		l.advance()
 		return Token{Type: TokenDot, Literal: ".", Pos: start}
 	case l.ch == '+':
@@ -125,7 +128,7 @@ func (l *Lexer) NextToken() Token {
 	case l.ch == '"':
 		return l.readQuotedIdent(start)
 	case isDigit(l.ch):
-		return l.readInteger(start)
+		return l.readNumber(start)
 	case isLetter(l.ch) || l.ch == '_':
 		return l.readIdentOrKeyword(start)
 	default:
@@ -192,12 +195,41 @@ func (l *Lexer) readString(start int) Token {
 	return Token{Type: TokenStrLit, Literal: str, Pos: start}
 }
 
-func (l *Lexer) readInteger(start int) Token {
+func (l *Lexer) readNumber(start int) Token {
 	begin := l.pos
+	isFloat := false
+
+	// Leading digits (may be absent for ".5" style literals).
 	for isDigit(l.ch) {
 		l.advance()
 	}
-	return Token{Type: TokenIntLit, Literal: l.input[begin:l.pos], Pos: start}
+
+	// Decimal point followed by digits.
+	if l.ch == '.' && isDigit(l.peek()) {
+		isFloat = true
+		l.advance() // consume '.'
+		for isDigit(l.ch) {
+			l.advance()
+		}
+	}
+
+	// Scientific notation: e.g. 1e10, 2.5e-3, .5E+2
+	if l.ch == 'e' || l.ch == 'E' {
+		isFloat = true
+		l.advance() // consume 'e'/'E'
+		if l.ch == '+' || l.ch == '-' {
+			l.advance() // consume sign
+		}
+		for isDigit(l.ch) {
+			l.advance()
+		}
+	}
+
+	lit := l.input[begin:l.pos]
+	if isFloat {
+		return Token{Type: TokenFloatLit, Literal: lit, Pos: start}
+	}
+	return Token{Type: TokenIntLit, Literal: lit, Pos: start}
 }
 
 func (l *Lexer) readIdentOrKeyword(start int) Token {

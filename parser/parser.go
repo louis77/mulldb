@@ -169,6 +169,15 @@ func (p *parser) parseColumnDef() (ColumnDef, error) {
 		dataType = "BOOLEAN"
 	case TokenTimestampKW:
 		dataType = "TIMESTAMP"
+	case TokenFloatKW:
+		dataType = "FLOAT"
+	case TokenDoubleKW:
+		dataType = "FLOAT"
+		p.next() // consume DOUBLE
+		if p.cur.Type != TokenIdent || !strings.EqualFold(p.cur.Literal, "PRECISION") {
+			return ColumnDef{}, fmt.Errorf("expected PRECISION after DOUBLE at position %d", p.cur.Pos)
+		}
+		// PRECISION will be consumed by the p.next() after the switch
 	default:
 		return ColumnDef{}, fmt.Errorf("expected data type, got %q at position %d",
 			p.cur.Literal, p.cur.Pos)
@@ -798,6 +807,13 @@ func (p *parser) parsePrimary() (Expr, error) {
 		}
 		p.next()
 		return &IntegerLit{Value: val}, nil
+	case TokenFloatLit:
+		val, err := strconv.ParseFloat(p.cur.Literal, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid float %q: %w", p.cur.Literal, err)
+		}
+		p.next()
+		return &FloatLit{Value: val}, nil
 	case TokenStrLit:
 		val := p.cur.Literal
 		p.next()

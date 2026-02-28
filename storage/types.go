@@ -10,6 +10,7 @@ const (
 	TypeText
 	TypeBoolean
 	TypeTimestamp
+	TypeFloat
 )
 
 func (d DataType) String() string {
@@ -22,6 +23,8 @@ func (d DataType) String() string {
 		return "BOOLEAN"
 	case TypeTimestamp:
 		return "TIMESTAMP"
+	case TypeFloat:
+		return "FLOAT"
 	default:
 		return "UNKNOWN"
 	}
@@ -67,6 +70,7 @@ func RowValue(values []any, ordinal int) any {
 // Values are in column-definition order. Each value is one of:
 //
 //	int64      (INTEGER)
+//	float64    (FLOAT)
 //	string     (TEXT)
 //	bool       (BOOLEAN)
 //	time.Time  (TIMESTAMP)
