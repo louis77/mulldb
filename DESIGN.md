@@ -262,9 +262,9 @@ This is faster than re-walking the AST for every row, which matters when scannin
 
 ### Aggregate Functions
 
-Queries with aggregate functions (COUNT, SUM, MIN, MAX) follow a separate code path from regular SELECT. The executor first detects whether a query is all-aggregate, all-non-aggregate, or mixed. Mixed queries (like `SELECT id, COUNT(*) FROM t`) are rejected with SQLSTATE code 42803, matching PostgreSQL behavior (no GROUP BY support yet).
+Queries with aggregate functions (COUNT, SUM, AVG, MIN, MAX) follow a separate code path from regular SELECT. The executor first detects whether a query is all-aggregate, all-non-aggregate, or mixed. Mixed queries (like `SELECT id, COUNT(*) FROM t`) are rejected with SQLSTATE code 42803, matching PostgreSQL behavior (no GROUP BY support yet).
 
-For all-aggregate queries, the executor makes a single pass over the table, updating accumulator state for each function. COUNT increments a counter (skipping NULLs for `COUNT(col)`, not for `COUNT(*)`). SUM adds values. MIN and MAX track extrema. After the scan, a single result row is produced.
+For all-aggregate queries, the executor makes a single pass over the table, updating accumulator state for each function. COUNT increments a counter (skipping NULLs for `COUNT(col)`, not for `COUNT(*)`). SUM adds values. AVG tracks sum and non-NULL count, then divides to produce a FLOAT result (NULL for empty or all-NULL sets). MIN and MAX track extrema. After the scan, a single result row is produced.
 
 ### Primary Key Optimization
 
@@ -282,7 +282,7 @@ The stable sort preserves insertion order for rows with equal sort keys, giving 
 
 When ORDER BY is absent, the executor keeps the existing streaming path with early LIMIT termination — no rows are buffered, and the scan stops as soon as LIMIT is satisfied. This means adding ORDER BY support has zero performance impact on queries that don't use it.
 
-ORDER BY with aggregate queries (COUNT, SUM, etc.) returns SQLSTATE `0A000` (feature not supported), since ORDER BY on a single aggregate result row is meaningless without GROUP BY.
+ORDER BY with aggregate queries (COUNT, SUM, AVG, etc.) returns SQLSTATE `0A000` (feature not supported), since ORDER BY on a single aggregate result row is meaningless without GROUP BY.
 
 ### Catalog Tables
 

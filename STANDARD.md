@@ -108,7 +108,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| E091-01 | AVG | Open |
+| E091-01 | AVG | **Done** (always returns FLOAT, NULL for empty/all-NULL) |
 | E091-02 | COUNT | **Done** (COUNT(*) and COUNT(col)) |
 | E091-03 | MAX | **Done** |
 | E091-04 | MIN | **Done** |
@@ -353,7 +353,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
 - Primary key constraints with B-tree index
 - Identifiers (delimited and case-insensitive)
-- Aggregate functions (COUNT, SUM, MIN, MAX)
+- Aggregate functions (COUNT, SUM, AVG, MIN, MAX)
 - ORDER BY (single/multi-column, ASC/DESC, NULLs last)
 - INNER JOIN (with table aliases, qualified column references, nested-loop execution)
 - Information schema (TABLES, COLUMNS views)
