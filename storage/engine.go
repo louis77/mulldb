@@ -608,6 +608,16 @@ func (e *engine) GetTable(name string) (*TableDef, bool) {
 	return e.catalog.getTable(name)
 }
 
+func (e *engine) RowCount(table string) (int64, error) {
+	ts, err := e.getTableState(table)
+	if err != nil {
+		return 0, err
+	}
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return int64(len(ts.heap.rows)), nil
+}
+
 func (e *engine) ListTables() []*TableDef {
 	e.catalogMu.RLock()
 	defer e.catalogMu.RUnlock()

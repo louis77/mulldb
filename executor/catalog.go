@@ -22,6 +22,7 @@ func init() {
 	registerPGType()
 	registerPGDatabase()
 	registerPGNamespace()
+	registerPGClass()
 	registerInformationSchemaTables()
 	registerInformationSchemaColumns()
 	registerInformationSchemaTableConstraints()
@@ -87,6 +88,67 @@ func registerPGNamespace() {
 				{ID: 2, Values: []any{int64(2200), "public"}},
 				{ID: 3, Values: []any{int64(13183), "information_schema"}},
 			}
+		},
+	}
+}
+
+// registerPGClass adds the pg_class catalog table.
+func registerPGClass() {
+	catalogTables["pg_catalog.pg_class"] = &catalogTable{
+		def: &storage.TableDef{
+			Name:        "pg_class",
+			NextOrdinal: 5,
+			Columns: []storage.ColumnDef{
+				{Name: "oid", DataType: storage.TypeInteger, Ordinal: 0},
+				{Name: "relname", DataType: storage.TypeText, Ordinal: 1},
+				{Name: "relnamespace", DataType: storage.TypeInteger, Ordinal: 2},
+				{Name: "relkind", DataType: storage.TypeText, Ordinal: 3},
+				{Name: "reltuples", DataType: storage.TypeInteger, Ordinal: 4},
+			},
+		},
+		rows: func(eng storage.Engine) []storage.Row {
+			var rows []storage.Row
+			var id int64
+			oid := int64(16384) // PostgreSQL convention for user objects
+
+			// User tables from the storage engine.
+			if eng != nil {
+				defs := eng.ListTables()
+				sort.Slice(defs, func(i, j int) bool {
+					return defs[i].Name < defs[j].Name
+				})
+				for _, def := range defs {
+					id++
+					count, _ := eng.RowCount(def.Name)
+					rows = append(rows, storage.Row{
+						ID: id,
+						Values: []any{oid, def.Name, int64(2200), "r", count},
+					})
+					oid++
+				}
+			}
+
+			// Catalog tables themselves.
+			var keys []string
+			for k := range catalogTables {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				id++
+				parts := strings.SplitN(key, ".", 2)
+				nsOID := int64(11) // pg_catalog
+				if parts[0] == "information_schema" {
+					nsOID = 13183
+				}
+				rows = append(rows, storage.Row{
+					ID:     id,
+					Values: []any{oid, parts[1], nsOID, "v", int64(0)},
+				})
+				oid++
+			}
+
+			return rows
 		},
 	}
 }

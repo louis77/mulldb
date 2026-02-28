@@ -18,6 +18,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
   - [ORDER BY](#order-by)
   - [INNER JOIN](#inner-join)
   - [LIMIT and OFFSET](#limit-and-offset)
+  - [Type Casts](#type-casts)
   - [Arithmetic Expressions](#arithmetic-expressions)
   - [String Concatenation](#string-concatenation)
   - [Scalar Functions](#scalar-functions)
@@ -47,6 +48,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
 - **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `NOW()`, `VERSION()`, math functions (`ABS`, `ROUND`, `CEIL`/`CEILING`, `FLOOR`, `POWER`/`POW`, `SQRT`, `MOD`), and a registration pattern for adding more
 - **Data types** — INTEGER (64-bit), FLOAT (64-bit IEEE 754), TEXT, BOOLEAN, TIMESTAMP (UTC), NULL
+- **Type casts** — PostgreSQL-style `expr::type` cast syntax; supports INTEGER, TEXT, BOOLEAN, FLOAT, TIMESTAMP targets; chainable (`expr::text::integer`)
 - **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers and floats; implicit int→float promotion in mixed arithmetic; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
 - **Pattern matching** — `LIKE` / `NOT LIKE` (case-sensitive), `ILIKE` / `NOT ILIKE` (case-insensitive, PostgreSQL extension); `%` matches zero or more characters, `_` matches exactly one Unicode codepoint; `ESCAPE` clause for literal `%`/`_`; NULL propagation
 - **IN predicate** — `IN (v1, v2, ...)` and `NOT IN (v1, v2, ...)`; SQL-standard three-valued NULL logic (NULL LHS → NULL, NULL in list with no match → NULL)
@@ -168,6 +170,10 @@ SELECT * FROM <table> LIMIT <n>;             -- return at most n rows
 SELECT * FROM <table> OFFSET <n>;            -- skip first n rows
 SELECT * FROM <table> LIMIT <n> OFFSET <m>;  -- pagination
 
+-- Type casts
+SELECT col::INTEGER FROM <table>;
+SELECT col::TEXT FROM <table>;
+
 -- Arithmetic expressions
 SELECT 1 + 2;
 SELECT col * 2 + 1 FROM <table>;
@@ -216,7 +222,7 @@ String comparison is **binary** (byte-order). There is no locale-aware collation
 
 | Type | Go representation | Description |
 |------|------------------|-------------|
-| `INTEGER` | `int64` | 64-bit signed integer (aliases: `INT`, `SMALLINT`, `BIGINT`) |
+| `INTEGER` | `int64` | 64-bit signed integer (aliases: `INT`, `INT2`, `INT4`, `INT8`, `SMALLINT`, `BIGINT`) |
 | `FLOAT` | `float64` | 64-bit IEEE 754 double-precision floating point (alias: `DOUBLE PRECISION`) |
 | `TEXT` | `string` | Variable-length UTF-8 string |
 | `BOOLEAN` | `bool` | `TRUE` or `FALSE` |
@@ -418,6 +424,22 @@ SELECT * FROM items WHERE id > 1 LIMIT 2;
 -- LIMIT applies after WHERE filtering
 ```
 
+### Type Casts
+
+The PostgreSQL-style `::` cast operator converts a value to a target type. It binds tighter than any other operator and can be chained.
+
+```sql
+SELECT 42::TEXT;           -- '42'
+SELECT '123'::INTEGER;     -- 123
+SELECT 1::BOOLEAN;         -- true
+SELECT 3.14::INTEGER;      -- 3
+
+-- Works in SELECT, WHERE, and with column references:
+SELECT reltuples::int8 AS count FROM pg_class WHERE relname = 'users';
+```
+
+Supported target types: `INTEGER` (and aliases `INT`, `INT8`, `BIGINT`, etc.), `TEXT`, `BOOLEAN`, `FLOAT`, `TIMESTAMP`.
+
 ### Arithmetic Expressions
 
 Arithmetic operators `+`, `-`, `*`, `/`, `%` (modulo) and unary minus are supported in SELECT columns, WHERE conditions, INSERT VALUES, and UPDATE SET clauses. Arithmetic works on both integers (64-bit signed) and floats (64-bit IEEE 754). When one operand is integer and the other is float, the integer is implicitly promoted to float. Division and modulo by zero return SQLSTATE `22012`.
@@ -575,6 +597,7 @@ Tables can be accessed with or without schema qualification. Unqualified names c
 | `pg_type` / `pg_catalog.pg_type` | `oid` (INTEGER), `typname` (TEXT) | Type information for supported data types |
 | `pg_database` / `pg_catalog.pg_database` | `datname` (TEXT) | Database names (always returns `mulldb`) |
 | `pg_namespace` / `pg_catalog.pg_namespace` | `oid` (INTEGER), `nspname` (TEXT) | Schema/namespace information (`pg_catalog`, `public`, `information_schema`) |
+| `pg_class` / `pg_catalog.pg_class` | `oid` (INTEGER), `relname` (TEXT), `relnamespace` (INTEGER), `relkind` (TEXT), `reltuples` (INTEGER) | Table/view metadata with row counts; joinable with `pg_namespace` on `oid = relnamespace` |
 | `information_schema.tables` | `table_schema` (TEXT), `table_name` (TEXT), `table_type` (TEXT) | Lists all user tables and system catalog tables |
 | `information_schema.columns` | `table_schema` (TEXT), `table_name` (TEXT), `column_name` (TEXT), `ordinal_position` (INTEGER), `data_type` (TEXT), `is_nullable` (TEXT) | Column metadata for all tables |
 | `information_schema.table_constraints` | `constraint_catalog` (TEXT), `constraint_schema` (TEXT), `constraint_name` (TEXT), `table_catalog` (TEXT), `table_schema` (TEXT), `table_name` (TEXT), `constraint_type` (TEXT), `is_deferrable` (TEXT), `initially_deferred` (TEXT) | PRIMARY KEY and UNIQUE constraints |

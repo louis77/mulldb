@@ -36,6 +36,7 @@ const (
 	TokenSlash     // /
 	TokenPercent   // %
 	TokenConcat    // ||
+	TokenCast      // ::
 
 	// Keywords.
 	TokenSelect
@@ -113,6 +114,7 @@ var tokenNames = map[TokenType]string{
 	TokenSlash:     "/",
 	TokenPercent:   "%",
 	TokenConcat:    "||",
+	TokenCast:      "::",
 	TokenSelect:    "SELECT",
 	TokenFrom:      "FROM",
 	TokenWhere:     "WHERE",
@@ -201,6 +203,9 @@ var keywords = map[string]TokenType{
 	"INT":      TokenIntegerKW,
 	"INTEGER":  TokenIntegerKW,
 	"BIGINT":   TokenIntegerKW,
+	"INT8":     TokenIntegerKW,
+	"INT4":     TokenIntegerKW,
+	"INT2":     TokenIntegerKW,
 	"TEXT":    TokenTextKW,
 	"BOOLEAN": TokenBooleanKW,
 	"AS":      TokenAs,

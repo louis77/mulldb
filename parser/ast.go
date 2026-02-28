@@ -250,6 +250,12 @@ type InExpr struct {
 	Not    bool // true for NOT IN
 }
 
+// CastExpr represents expr::type (PostgreSQL-style type cast).
+type CastExpr struct {
+	Expr     Expr
+	TypeName string // uppercased: "INTEGER", "TEXT", "BOOLEAN", "FLOAT", "TIMESTAMP"
+}
+
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
@@ -265,3 +271,4 @@ func (*IsNullExpr) exprNode()        {}
 func (*NotExpr) exprNode()           {}
 func (*LikeExpr) exprNode()          {}
 func (*InExpr) exprNode()            {}
+func (*CastExpr) exprNode()          {}
