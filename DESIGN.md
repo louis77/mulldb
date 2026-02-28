@@ -211,6 +211,8 @@ The first migration (v1→v2) handles the addition of the primary key flag byte 
 
 The second migration (v2→v3) adds ordinal fields to CreateTable column entries. Each column gets a sequential ordinal (0, 1, 2, ...) matching its position in the original schema. This enables ordinal-based column storage for instant ALTER TABLE operations.
 
+The third migration (v3→v4) adds a NOT NULL flag byte to CreateTable and AddColumn entries. The per-column format becomes `[name:str][datatype:u8][pk:u8][notNull:u8][ordinal:u16]`. During migration, PRIMARY KEY columns get `notNull=1` (PK implies NOT NULL); all other columns get `notNull=0`.
+
 **Split WAL migration.** When the engine detects a legacy single `wal.dat` file (and no `catalog.wal`), it requires a structural migration to the per-table layout. The migration reads all entries from `wal.dat`, classifies them as DDL or DML, tracks which tables survive after all CREATE/DROP sequences, and writes: `catalog.wal` (all DDL entries), plus `tables/<name>.wal` for each surviving table (only that table's DML entries). DML for dropped tables is discarded, immediately reclaiming space. The original `wal.dat` is preserved as `wal.dat.bak`. If the legacy file also needs a format version upgrade (e.g. v1→v2), that migration runs first, then the split migration follows.
 
 ### Primary Key Index

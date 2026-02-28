@@ -91,9 +91,9 @@ func TestParse_CreateTable(t *testing.T) {
 		t.Fatalf("columns count = %d, want 3", len(ct.Columns))
 	}
 	wantCols := []ColumnDef{
-		{"id", "INTEGER", false},
-		{"name", "TEXT", false},
-		{"active", "BOOLEAN", false},
+		{"id", "INTEGER", false, false},
+		{"name", "TEXT", false, false},
+		{"active", "BOOLEAN", false, false},
 	}
 	for i, want := range wantCols {
 		got := ct.Columns[i]
@@ -124,6 +124,45 @@ func TestParse_CreateTableMultiplePKError(t *testing.T) {
 	_, err := Parse("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT PRIMARY KEY)")
 	if err == nil {
 		t.Fatal("expected error for multiple primary keys")
+	}
+}
+
+func TestParse_CreateTableNotNull(t *testing.T) {
+	stmt, err := Parse("CREATE TABLE t (id INTEGER NOT NULL, name TEXT)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := stmt.(*CreateTableStmt)
+	if !ct.Columns[0].NotNull {
+		t.Error("column[0].NotNull = false, want true")
+	}
+	if ct.Columns[1].NotNull {
+		t.Error("column[1].NotNull = true, want false")
+	}
+}
+
+func TestParse_CreateTableNotNullPrimaryKey(t *testing.T) {
+	tests := []struct {
+		sql  string
+		desc string
+	}{
+		{"CREATE TABLE t (id INTEGER PRIMARY KEY NOT NULL, name TEXT)", "PK then NOT NULL"},
+		{"CREATE TABLE t (id INTEGER NOT NULL PRIMARY KEY, name TEXT)", "NOT NULL then PK"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			stmt, err := Parse(tt.sql)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ct := stmt.(*CreateTableStmt)
+			if !ct.Columns[0].PrimaryKey {
+				t.Error("column[0].PrimaryKey = false, want true")
+			}
+			if !ct.Columns[0].NotNull {
+				t.Error("column[0].NotNull = false, want true")
+			}
+		})
 	}
 }
 

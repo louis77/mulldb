@@ -154,7 +154,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| E141-01 | NOT NULL constraints | **Partial** (implicit on PRIMARY KEY only; no standalone NOT NULL) |
+| E141-01 | NOT NULL constraints | **Done** (standalone NOT NULL on columns; implicit on PRIMARY KEY; enforced on INSERT/UPDATE; SQLSTATE 23502) |
 | E141-02 | UNIQUE constraints of NOT NULL columns | **Partial** (via `CREATE UNIQUE INDEX`; no inline column constraint syntax yet) |
 | E141-03 | PRIMARY KEY constraints | **Done** (single-column, B-tree indexed) |
 | E141-04 | Basic FOREIGN KEY constraint with NO ACTION default | Open |

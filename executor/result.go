@@ -80,6 +80,11 @@ func sqlstateForError(err error) string {
 		return "23505" // unique_violation
 	}
 
+	var notNullViolation *storage.NotNullViolationError
+	if errors.As(err, &notNullViolation) {
+		return "23502" // not_null_violation
+	}
+
 	var colExists *storage.ColumnExistsError
 	if errors.As(err, &colExists) {
 		return "42701" // duplicate_column

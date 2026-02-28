@@ -227,7 +227,7 @@ func registerInformationSchemaColumns() {
 				for i, col := range cols {
 					id++
 					nullable := "YES"
-					if col.PrimaryKey {
+					if col.NotNull {
 						nullable = "NO"
 					}
 					rows = append(rows, storage.Row{

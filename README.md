@@ -43,6 +43,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
 - **SQL support** — CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
+- **NOT NULL constraints** — standalone `NOT NULL` on any column; enforced on INSERT and UPDATE; PRIMARY KEY columns are implicitly NOT NULL
 - **Secondary indexes** — `CREATE [UNIQUE] INDEX [name] ON table(column)` and `DROP INDEX name ON table`; optional index names (auto-generated as `idx_{column}`); table-scoped names; automatic query acceleration for `WHERE col = literal`; NULL values not indexed (multiple NULLs allowed in UNIQUE indexes per SQL standard)
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
@@ -139,6 +140,7 @@ export MULLDB_LOG_LEVEL=1
 -- Create a table
 CREATE TABLE <name> (<column> <type>, ...);
 CREATE TABLE <name> (<column> <type> PRIMARY KEY, ...);  -- with primary key
+CREATE TABLE <name> (<column> <type> NOT NULL, ...);     -- with not null constraint
 
 -- Drop a table
 DROP TABLE <name>;

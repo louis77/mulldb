@@ -320,12 +320,12 @@ All features described in the README have been **verified as implemented**:
 | **Pattern Matching** | LIKE/NOT LIKE, ILIKE/NOT ILIKE (case-insensitive), ESCAPE clause, Unicode-aware `_` and `%` |
 | **IN Predicate** | IN/NOT IN with value lists, SQL-standard three-valued NULL logic |
 | **Data Types** | INTEGER (64-bit), FLOAT (64-bit IEEE 754, aliases: DOUBLE PRECISION), TEXT, BOOLEAN, TIMESTAMP (UTC-only), NULL |
-| **Constraints** | PRIMARY KEY (single-column only) with B-tree index enforcement |
+| **Constraints** | PRIMARY KEY (single-column only) with B-tree index enforcement; NOT NULL column constraints with INSERT/UPDATE validation |
 | **Functions** | COUNT(*)/COUNT(col), SUM, MIN, MAX, LENGTH/CHAR_LENGTH/CHARACTER_LENGTH, OCTET_LENGTH, CONCAT, NOW, VERSION, ABS, ROUND, CEIL/CEILING, FLOOR, POWER/POW, SQRT, MOD |
 | **Identifiers** | Double-quoted identifiers (preserve case, reserved words), UTF-8 throughout |
 | **Comments** | Single-line (`--`) and nested block (`/* */`) |
 | **Catalog Tables** | pg_type, pg_database, pg_namespace, information_schema.tables, information_schema.columns, information_schema.table_constraints, information_schema.key_column_usage |
-| **Storage** | Split WAL (catalog.wal + per-table WALs), CRC32 checksums, fsync, WAL replay, WAL migration (v1→v2→v3, single→split) |
+| **Storage** | Split WAL (catalog.wal + per-table WALs), CRC32 checksums, fsync, WAL replay, WAL migration (v1→v2→v3→v4, single→split) |
 | **Concurrency** | Per-table locking (RW mutex), concurrent writes to independent tables, multiple readers |
 | **Observability** | Statement tracing (SET trace = on/off, SHOW TRACE), SQLSTATE error codes |
 

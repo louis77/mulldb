@@ -151,7 +151,7 @@ func (e *Executor) execCreateTable(s *parser.CreateTableStmt, tr *Trace) (*Resul
 		if err != nil {
 			return nil, WrapError(err)
 		}
-		cols[i] = storage.ColumnDef{Name: c.Name, DataType: dt, PrimaryKey: c.PrimaryKey}
+		cols[i] = storage.ColumnDef{Name: c.Name, DataType: dt, PrimaryKey: c.PrimaryKey, NotNull: c.NotNull || c.PrimaryKey}
 	}
 
 	if tr != nil {
@@ -194,6 +194,10 @@ func (e *Executor) execDropTable(s *parser.DropTableStmt, tr *Trace) (*Result, e
 func (e *Executor) execAlterTableAddColumn(s *parser.AlterTableAddColumnStmt, tr *Trace) (*Result, error) {
 	if isCatalogTable(s.Table.Schema, s.Table.Name) {
 		return nil, &QueryError{Code: "42809", Message: fmt.Sprintf("cannot alter catalog table %q", s.Table.String())}
+	}
+
+	if s.Column.NotNull {
+		return nil, &QueryError{Code: "0A000", Message: "cannot add a NOT NULL column without a default value"}
 	}
 
 	dt, err := parseDataType(s.Column.DataType)

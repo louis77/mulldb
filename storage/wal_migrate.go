@@ -21,6 +21,7 @@ type entryMigrateFunc func(op byte, payload []byte) (byte, []byte, error)
 var walMigrations = map[uint16]entryMigrateFunc{
 	1: migrateV1ToV2,
 	2: migrateV2ToV3,
+	3: migrateV3ToV4,
 }
 
 // rawEntry is an undecoded WAL entry (op + payload, CRC already verified).
@@ -320,6 +321,96 @@ func migrateV2ToV3(op byte, payload []byte) (byte, []byte, error) {
 	}
 
 	return op, buf, nil
+}
+
+// migrateV3ToV4 adds the NOT NULL flag byte to each column in CREATE TABLE
+// and ADD COLUMN entries. PK columns get notNull=1; all others get notNull=0.
+// All other entry types pass through unchanged.
+//
+// v3 CREATE TABLE column format: [string name][byte dataType][byte pkFlag][uint16 ordinal]
+// v4 CREATE TABLE column format: [string name][byte dataType][byte pkFlag][byte notNullFlag][uint16 ordinal]
+//
+// v3 ADD COLUMN format: [table:str][name:str][datatype:u8][pk:u8][ordinal:u16]
+// v4 ADD COLUMN format: [table:str][name:str][datatype:u8][pk:u8][notNull:u8][ordinal:u16]
+func migrateV3ToV4(op byte, payload []byte) (byte, []byte, error) {
+	switch op {
+	case opCreateTable:
+		return migrateV3ToV4CreateTable(payload)
+	case opAddColumn:
+		return migrateV3ToV4AddColumn(payload)
+	default:
+		return op, payload, nil
+	}
+}
+
+func migrateV3ToV4CreateTable(payload []byte) (byte, []byte, error) {
+	name, rest, err := decodeString(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("decode table name: %w", err)
+	}
+	if len(rest) < 2 {
+		return 0, nil, fmt.Errorf("truncated column count")
+	}
+	count := binary.BigEndian.Uint16(rest[:2])
+	rest = rest[2:]
+
+	type v3Col struct {
+		Name     string
+		DataType byte
+		PK       byte
+		Ordinal  uint16
+	}
+	cols := make([]v3Col, count)
+	for i := range cols {
+		cols[i].Name, rest, err = decodeString(rest)
+		if err != nil {
+			return 0, nil, fmt.Errorf("column %d name: %w", i, err)
+		}
+		if len(rest) < 4 { // datatype(1) + pk(1) + ordinal(2)
+			return 0, nil, fmt.Errorf("column %d: truncated data", i)
+		}
+		cols[i].DataType = rest[0]
+		cols[i].PK = rest[1]
+		cols[i].Ordinal = binary.BigEndian.Uint16(rest[2:4])
+		rest = rest[4:]
+	}
+
+	// Re-encode in v4 format. PK columns are implicitly NOT NULL.
+	buf := encodeString(nil, name)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(count))
+	for _, col := range cols {
+		buf = encodeString(buf, col.Name)
+		buf = append(buf, col.DataType)
+		buf = append(buf, col.PK)
+		buf = append(buf, col.PK) // notNull = same as PK flag
+		buf = binary.BigEndian.AppendUint16(buf, col.Ordinal)
+	}
+	return opCreateTable, buf, nil
+}
+
+func migrateV3ToV4AddColumn(payload []byte) (byte, []byte, error) {
+	table, rest, err := decodeString(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("decode table name: %w", err)
+	}
+	colName, rest, err := decodeString(rest)
+	if err != nil {
+		return 0, nil, fmt.Errorf("decode column name: %w", err)
+	}
+	if len(rest) < 4 { // datatype(1) + pk(1) + ordinal(2)
+		return 0, nil, fmt.Errorf("truncated add column data")
+	}
+	dataType := rest[0]
+	pk := rest[1]
+	ordinal := binary.BigEndian.Uint16(rest[2:4])
+
+	buf := encodeString(nil, table)
+	buf = encodeString(buf, colName)
+	buf = append(buf, dataType)
+	buf = append(buf, pk)
+	buf = append(buf, pk) // notNull = same as PK flag
+	buf = binary.BigEndian.AppendUint16(buf, ordinal)
+	return opAddColumn, buf, nil
 }
 
 // -------------------------------------------------------------------------

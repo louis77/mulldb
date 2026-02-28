@@ -768,12 +768,14 @@ func TestExecutor_PrimaryKey_DuplicateInsert_23505(t *testing.T) {
 	assertSQLSTATE(t, err, "23505")
 }
 
-func TestExecutor_PrimaryKey_NullPK_23505(t *testing.T) {
+func TestExecutor_PrimaryKey_NullPK_23502(t *testing.T) {
 	e := setup(t)
 	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
 
+	// PK implies NOT NULL, so inserting NULL gives a not-null violation (23502),
+	// matching PostgreSQL behavior.
 	_, err := e.Execute("INSERT INTO users VALUES (NULL, 'alice')")
-	assertSQLSTATE(t, err, "23505")
+	assertSQLSTATE(t, err, "23502")
 }
 
 func TestExecutor_PrimaryKey_UpdateViolation_23505(t *testing.T) {
@@ -3027,6 +3029,92 @@ func TestExecutor_NonUniqueIndex(t *testing.T) {
 	}
 	if string(r.Rows[0][0]) != "1" || string(r.Rows[1][0]) != "3" {
 		t.Errorf("ids = [%s, %s], want [1, 3]", r.Rows[0][0], r.Rows[1][0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NOT NULL constraint
+// ---------------------------------------------------------------------------
+
+func TestExecutor_NotNull_InsertExplicitNull_23502(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+
+	_, err := e.Execute("INSERT INTO t VALUES (1, NULL)")
+	assertSQLSTATE(t, err, "23502")
+}
+
+func TestExecutor_NotNull_InsertOmittedColumn_23502(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+
+	_, err := e.Execute("INSERT INTO t (id) VALUES (1)")
+	assertSQLSTATE(t, err, "23502")
+}
+
+func TestExecutor_NotNull_UpdateToNull_23502(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice')")
+
+	_, err := e.Execute("UPDATE t SET name = NULL WHERE id = 1")
+	assertSQLSTATE(t, err, "23502")
+}
+
+func TestExecutor_NotNull_InsertValid(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1, 'alice', NULL)") // age is nullable, should work
+
+	r := exec(t, e, "SELECT name FROM t WHERE id = 1")
+	if string(r.Rows[0][0]) != "alice" {
+		t.Errorf("name = %q, want 'alice'", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_NotNull_PKImpliesNotNull(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+
+	// PK column should reject NULL even without explicit NOT NULL.
+	_, err := e.Execute("INSERT INTO t VALUES (NULL, 'alice')")
+	if err == nil {
+		t.Fatal("expected error for NULL PK")
+	}
+}
+
+func TestExecutor_NotNull_InformationSchema(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")
+
+	r := exec(t, e, "SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = 't' ORDER BY ordinal_position")
+	if len(r.Rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(r.Rows))
+	}
+	want := []struct {
+		col      string
+		nullable string
+	}{
+		{"id", "NO"},
+		{"name", "NO"},
+		{"age", "YES"},
+	}
+	for i, w := range want {
+		gotCol := string(r.Rows[i][0])
+		gotNullable := string(r.Rows[i][1])
+		if gotCol != w.col || gotNullable != w.nullable {
+			t.Errorf("row[%d] = (%q, %q), want (%q, %q)", i, gotCol, gotNullable, w.col, w.nullable)
+		}
+	}
+}
+
+func TestExecutor_NotNull_AlterTableReject(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+
+	_, err := e.Execute("ALTER TABLE t ADD COLUMN name TEXT NOT NULL")
+	if err == nil {
+		t.Fatal("expected error for ALTER TABLE ADD COLUMN ... NOT NULL")
 	}
 }
 
