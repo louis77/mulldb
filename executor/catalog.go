@@ -24,6 +24,8 @@ func init() {
 	registerPGNamespace()
 	registerInformationSchemaTables()
 	registerInformationSchemaColumns()
+	registerInformationSchemaTableConstraints()
+	registerInformationSchemaKeyColumnUsage()
 }
 
 // registerPGType adds the pg_type catalog table.
@@ -202,6 +204,157 @@ func registerInformationSchemaColumns() {
 				appendColumns(parts[0], parts[1], catalogTables[key].def.Columns)
 			}
 
+			return rows
+		},
+	}
+}
+
+// registerInformationSchemaTableConstraints adds the
+// information_schema.table_constraints catalog table.
+func registerInformationSchemaTableConstraints() {
+	catalogTables["information_schema.table_constraints"] = &catalogTable{
+		def: &storage.TableDef{
+			Name:        "table_constraints",
+			NextOrdinal: 9,
+			Columns: []storage.ColumnDef{
+				{Name: "constraint_catalog", DataType: storage.TypeText, Ordinal: 0},
+				{Name: "constraint_schema", DataType: storage.TypeText, Ordinal: 1},
+				{Name: "constraint_name", DataType: storage.TypeText, Ordinal: 2},
+				{Name: "table_catalog", DataType: storage.TypeText, Ordinal: 3},
+				{Name: "table_schema", DataType: storage.TypeText, Ordinal: 4},
+				{Name: "table_name", DataType: storage.TypeText, Ordinal: 5},
+				{Name: "constraint_type", DataType: storage.TypeText, Ordinal: 6},
+				{Name: "is_deferrable", DataType: storage.TypeText, Ordinal: 7},
+				{Name: "initially_deferred", DataType: storage.TypeText, Ordinal: 8},
+			},
+		},
+		rows: func(eng storage.Engine) []storage.Row {
+			var rows []storage.Row
+			var id int64
+			if eng == nil {
+				return rows
+			}
+			defs := eng.ListTables()
+			sort.Slice(defs, func(i, j int) bool {
+				return defs[i].Name < defs[j].Name
+			})
+			for _, def := range defs {
+				// PRIMARY KEY constraint.
+				for _, col := range def.Columns {
+					if col.PrimaryKey {
+						id++
+						rows = append(rows, storage.Row{
+							ID: id,
+							Values: []any{
+								"mulldb",
+								"public",
+								def.Name + "_pkey",
+								"mulldb",
+								"public",
+								def.Name,
+								"PRIMARY KEY",
+								"NO",
+								"NO",
+							},
+						})
+						break
+					}
+				}
+				// UNIQUE constraints from indexes.
+				for _, idx := range def.Indexes {
+					if idx.Unique {
+						id++
+						rows = append(rows, storage.Row{
+							ID: id,
+							Values: []any{
+								"mulldb",
+								"public",
+								idx.Name,
+								"mulldb",
+								"public",
+								def.Name,
+								"UNIQUE",
+								"NO",
+								"NO",
+							},
+						})
+					}
+				}
+			}
+			return rows
+		},
+	}
+}
+
+// registerInformationSchemaKeyColumnUsage adds the
+// information_schema.key_column_usage catalog table.
+func registerInformationSchemaKeyColumnUsage() {
+	catalogTables["information_schema.key_column_usage"] = &catalogTable{
+		def: &storage.TableDef{
+			Name:        "key_column_usage",
+			NextOrdinal: 8,
+			Columns: []storage.ColumnDef{
+				{Name: "constraint_catalog", DataType: storage.TypeText, Ordinal: 0},
+				{Name: "constraint_schema", DataType: storage.TypeText, Ordinal: 1},
+				{Name: "constraint_name", DataType: storage.TypeText, Ordinal: 2},
+				{Name: "table_catalog", DataType: storage.TypeText, Ordinal: 3},
+				{Name: "table_schema", DataType: storage.TypeText, Ordinal: 4},
+				{Name: "table_name", DataType: storage.TypeText, Ordinal: 5},
+				{Name: "column_name", DataType: storage.TypeText, Ordinal: 6},
+				{Name: "ordinal_position", DataType: storage.TypeInteger, Ordinal: 7},
+			},
+		},
+		rows: func(eng storage.Engine) []storage.Row {
+			var rows []storage.Row
+			var id int64
+			if eng == nil {
+				return rows
+			}
+			defs := eng.ListTables()
+			sort.Slice(defs, func(i, j int) bool {
+				return defs[i].Name < defs[j].Name
+			})
+			for _, def := range defs {
+				// PRIMARY KEY column.
+				for _, col := range def.Columns {
+					if col.PrimaryKey {
+						id++
+						rows = append(rows, storage.Row{
+							ID: id,
+							Values: []any{
+								"mulldb",
+								"public",
+								def.Name + "_pkey",
+								"mulldb",
+								"public",
+								def.Name,
+								col.Name,
+								int64(1),
+							},
+						})
+						break
+					}
+				}
+				// UNIQUE index columns.
+				for _, idx := range def.Indexes {
+					if idx.Unique {
+						id++
+						rows = append(rows, storage.Row{
+							ID: id,
+							Values: []any{
+								"mulldb",
+								"public",
+								idx.Name,
+								"mulldb",
+								"public",
+								def.Name,
+								idx.Column,
+								int64(1),
+							},
+						})
+					}
+				}
+			}
 			return rows
 		},
 	}

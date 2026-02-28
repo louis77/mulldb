@@ -462,7 +462,21 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 			fromAlias = p.cur.Literal
 			p.next()
 		}
-		// Parse JOIN clauses.
+		// Parse implicit cross-joins: FROM t1 a, t2 b, ...
+		for p.cur.Type == TokenComma {
+			p.next() // consume comma
+			joinRef, err := p.parseTableRef()
+			if err != nil {
+				return nil, err
+			}
+			var joinAlias string
+			if p.cur.Type == TokenIdent && !isSelectClauseKeyword(p.cur.Literal) {
+				joinAlias = p.cur.Literal
+				p.next()
+			}
+			joins = append(joins, JoinClause{Table: joinRef, Alias: joinAlias, On: nil})
+		}
+		// Parse explicit JOIN clauses.
 		for p.cur.Type == TokenJoin || p.cur.Type == TokenInner {
 			if p.cur.Type == TokenInner {
 				p.next() // consume INNER

@@ -290,6 +290,148 @@ func TestCatalog_InformationSchemaColumnsInsertReadOnly(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// information_schema.table_constraints
+// ---------------------------------------------------------------------------
+
+func TestCatalog_TableConstraintsPrimaryKey(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+	r := exec(t, e, "SELECT constraint_name, table_name, constraint_type FROM information_schema.table_constraints WHERE table_name = 'users'")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "users_pkey" {
+		t.Errorf("constraint_name = %q, want users_pkey", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "users" {
+		t.Errorf("table_name = %q, want users", r.Rows[0][1])
+	}
+	if string(r.Rows[0][2]) != "PRIMARY KEY" {
+		t.Errorf("constraint_type = %q, want PRIMARY KEY", r.Rows[0][2])
+	}
+}
+
+func TestCatalog_TableConstraintsUnique(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+	exec(t, e, "CREATE UNIQUE INDEX users_email_idx ON users (email)")
+
+	r := exec(t, e, "SELECT constraint_name, constraint_type FROM information_schema.table_constraints WHERE table_name = 'users' ORDER BY constraint_name")
+
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	// Sorted: users_email_idx < users_pkey
+	if string(r.Rows[0][0]) != "users_email_idx" || string(r.Rows[0][1]) != "UNIQUE" {
+		t.Errorf("row 0 = [%s, %s], want [users_email_idx, UNIQUE]", r.Rows[0][0], r.Rows[0][1])
+	}
+	if string(r.Rows[1][0]) != "users_pkey" || string(r.Rows[1][1]) != "PRIMARY KEY" {
+		t.Errorf("row 1 = [%s, %s], want [users_pkey, PRIMARY KEY]", r.Rows[1][0], r.Rows[1][1])
+	}
+}
+
+func TestCatalog_TableConstraintsNoPK(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE logs (msg TEXT)")
+
+	r := exec(t, e, "SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = 'logs'")
+
+	if len(r.Rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(r.Rows))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// information_schema.key_column_usage
+// ---------------------------------------------------------------------------
+
+func TestCatalog_KeyColumnUsagePrimaryKey(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+	r := exec(t, e, "SELECT constraint_name, column_name, ordinal_position FROM information_schema.key_column_usage WHERE table_name = 'users'")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "users_pkey" {
+		t.Errorf("constraint_name = %q, want users_pkey", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "id" {
+		t.Errorf("column_name = %q, want id", r.Rows[0][1])
+	}
+	if string(r.Rows[0][2]) != "1" {
+		t.Errorf("ordinal_position = %q, want 1", r.Rows[0][2])
+	}
+}
+
+func TestCatalog_KeyColumnUsageUnique(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+	exec(t, e, "CREATE UNIQUE INDEX users_email_idx ON users (email)")
+
+	r := exec(t, e, "SELECT constraint_name, column_name FROM information_schema.key_column_usage WHERE table_name = 'users' ORDER BY constraint_name")
+
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "users_email_idx" || string(r.Rows[0][1]) != "email" {
+		t.Errorf("row 0 = [%s, %s], want [users_email_idx, email]", r.Rows[0][0], r.Rows[0][1])
+	}
+	if string(r.Rows[1][0]) != "users_pkey" || string(r.Rows[1][1]) != "id" {
+		t.Errorf("row 1 = [%s, %s], want [users_pkey, id]", r.Rows[1][0], r.Rows[1][1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Implicit cross-join and catalog tables in JOINs
+// ---------------------------------------------------------------------------
+
+func TestCatalog_ImplicitCrossJoin(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t1 (id INTEGER PRIMARY KEY, a TEXT)")
+	exec(t, e, "CREATE TABLE t2 (id INTEGER PRIMARY KEY, b TEXT)")
+	exec(t, e, "INSERT INTO t1 (id, a) VALUES (1, 'x')")
+	exec(t, e, "INSERT INTO t2 (id, b) VALUES (1, 'y')")
+
+	r := exec(t, e, "SELECT p.a, q.b FROM t1 p, t2 q WHERE p.id = q.id")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "x" || string(r.Rows[0][1]) != "y" {
+		t.Errorf("row = [%s, %s], want [x, y]", r.Rows[0][0], r.Rows[0][1])
+	}
+}
+
+func TestCatalog_TablePlusConstraintQuery(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE addresses (id INTEGER PRIMARY KEY, street TEXT, city TEXT)")
+
+	r := exec(t, e, `SELECT tc.constraint_name AS constraint_name, kc.column_name AS column_name
+		FROM information_schema.table_constraints tc, information_schema.key_column_usage kc
+		WHERE tc.constraint_type = 'PRIMARY KEY'
+		AND kc.table_name = tc.table_name
+		AND kc.table_schema = tc.table_schema
+		AND kc.constraint_name = tc.constraint_name
+		AND tc.table_schema = 'public'
+		AND tc.table_name = 'addresses'
+		ORDER BY kc.ordinal_position`)
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "addresses_pkey" {
+		t.Errorf("constraint_name = %q, want addresses_pkey", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "id" {
+		t.Errorf("column_name = %q, want id", r.Rows[0][1])
+	}
+}
+
 func TestCatalog_InformationSchemaInsertReadOnly(t *testing.T) {
 	e := setup(t)
 	_, err := e.Execute("INSERT INTO information_schema.tables (table_schema, table_name, table_type) VALUES ('public', 'fake', 'BASE TABLE')")

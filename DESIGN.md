@@ -300,9 +300,9 @@ ORDER BY with aggregate queries (COUNT, SUM, AVG, etc.) returns SQLSTATE `0A000`
 
 ### Catalog Tables
 
-PostgreSQL clients expect to query system catalogs like `pg_catalog.pg_type` and `information_schema.tables`. The executor maintains a registry of virtual catalog tables that are populated on demand from the storage engine's metadata. These tables participate in normal SELECT execution — the same WHERE, LIMIT, OFFSET, and column projection logic applies.
+PostgreSQL clients expect to query system catalogs like `pg_catalog.pg_type` and `information_schema.tables`. The executor maintains a registry of virtual catalog tables that are populated on demand from the storage engine's metadata. These tables participate in normal SELECT execution — the same WHERE, LIMIT, OFFSET, and column projection logic applies. Catalog tables can also participate in JOINs (including implicit cross-joins via comma-separated FROM), which is required for constraint introspection queries issued by tools like TablePlus.
 
-Catalog tables are registered in `init()` functions using a simple registry pattern. Adding a new system table is just defining its schema and a function that generates its rows.
+Catalog tables are registered in `init()` functions using a simple registry pattern. Adding a new system table is just defining its schema and a function that generates its rows. Constraint metadata is synthesized from the storage layer: primary key constraint names follow the `<table>_pkey` convention, and UNIQUE constraint names use the index name from `IndexDef`.
 
 ### Scalar Functions
 
