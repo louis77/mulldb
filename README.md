@@ -120,6 +120,7 @@ All options can be set via CLI flags or environment variables. Environment varia
 | `--password` | `MULLDB_PASSWORD` | *(empty)* | Password for authentication |
 | `--log-level` | `MULLDB_LOG_LEVEL` | `0` | Log verbosity: `0` = off, `1` = log SQL statements with outcome (`OK`/`ERROR`) and row counts |
 | `--migrate` | — | `false` | Migrate WAL file format if needed (see [WAL Migration](#wal-migration)) |
+| `--fsync` | `MULLDB_FSYNC` | `true` | Enable fsync on WAL writes; disable for speed at the risk of data loss on crash |
 
 Example with environment variables:
 
@@ -675,6 +676,21 @@ SHOW TRACE;
 --  Rows Scanned  | 6
 --  Rows Returned | 3
 ```
+
+### Fsync Control
+
+By default, every WAL write is followed by `fsync(2)` to guarantee crash durability. For bulk loading or development, you can disable fsync at runtime for significantly faster writes — at the risk of data loss if the process crashes.
+
+```sql
+SET fsync = off;   -- disable fsync (faster writes, less durable)
+SET fsync = on;    -- re-enable fsync (default)
+SHOW FSYNC;        -- show current setting
+--  fsync
+-- -------
+--  on
+```
+
+The initial default can also be set via the `--fsync` CLI flag or `MULLDB_FSYNC` environment variable.
 
 ### Memory Introspection
 

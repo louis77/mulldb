@@ -13,6 +13,7 @@ type Config struct {
 	Password string
 	LogLevel int
 	Migrate  bool
+	Fsync    bool
 }
 
 func Parse() *Config {
@@ -23,6 +24,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.Password, "password", envStr("MULLDB_PASSWORD", ""), "auth password")
 	flag.IntVar(&cfg.LogLevel, "log-level", envInt("MULLDB_LOG_LEVEL", 0), "log verbosity (0=off, 1=SQL statements)")
 	flag.BoolVar(&cfg.Migrate, "migrate", false, "migrate WAL file format if needed")
+	flag.BoolVar(&cfg.Fsync, "fsync", envBool("MULLDB_FSYNC", true), "enable fsync on WAL writes (disable for speed at risk of data loss on crash)")
 	flag.Parse()
 	return cfg
 }
@@ -30,6 +32,15 @@ func Parse() *Config {
 func envStr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
 	}
 	return fallback
 }

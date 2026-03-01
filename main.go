@@ -23,6 +23,8 @@ func main() {
 	}
 	defer eng.Close()
 
+	eng.SetFsync(cfg.Fsync)
+
 	exec := executor.New(eng)
 	srv := server.New(cfg, exec)
 

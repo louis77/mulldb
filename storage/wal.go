@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync/atomic"
 )
 
 // WAL file header: [4-byte magic "MWAL"][uint16 version]
@@ -53,7 +54,8 @@ type rowUpdate struct {
 // Entry format: [uint32 totalLen][byte op][payload…][uint32 crc32]
 // CRC covers the op byte + payload.
 type WAL struct {
-	file *os.File
+	file  *os.File
+	fsync *atomic.Bool
 }
 
 // OpenWAL opens (or creates) the WAL file at path. If the file uses an
@@ -176,7 +178,10 @@ func (w *WAL) writeEntry(op byte, payload []byte) error {
 	if _, err := w.file.Write(entry); err != nil {
 		return err
 	}
-	return w.file.Sync()
+	if w.fsync == nil || w.fsync.Load() {
+		return w.file.Sync()
+	}
+	return nil
 }
 
 // WriteCreateTable logs a CREATE TABLE operation.

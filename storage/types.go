@@ -215,5 +215,7 @@ type Engine interface {
 	LookupByIndex(table string, indexName string, value any) ([]Row, error)
 	RowCount(table string) (int64, error)
 	MemoryUsage() []TableMemoryInfo
+	SetFsync(enabled bool)
+	GetFsync() bool
 	Close() error
 }

@@ -23,6 +23,14 @@ func New(engine storage.Engine) *Executor {
 	return &Executor{engine: engine}
 }
 
+func (e *Executor) SetFsync(enabled bool) {
+	e.engine.SetFsync(enabled)
+}
+
+func (e *Executor) GetFsync() bool {
+	return e.engine.GetFsync()
+}
+
 // Execute runs a single SQL statement (no tracing overhead).
 func (e *Executor) Execute(sql string) (*Result, error) {
 	return e.execute(sql, nil)

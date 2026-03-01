@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // tableState holds the per-table mutex, heap, WAL, and a flag indicating
@@ -42,6 +43,7 @@ type engine struct {
 	catalog     *catalog
 	tableStates map[string]*tableState
 	catalogWAL  *WAL
+	fsync       atomic.Bool
 }
 
 const (
@@ -107,6 +109,8 @@ func Open(dataDir string, migrate bool) (Engine, error) {
 		tableStates: make(map[string]*tableState),
 		catalogWAL:  catWAL,
 	}
+	e.fsync.Store(true)
+	e.catalogWAL.fsync = &e.fsync
 
 	// Phase 1: Replay catalog WAL to learn all table schemas.
 	catHandler := &catalogReplayHandler{catalog: e.catalog}
@@ -158,6 +162,7 @@ func (e *engine) openTableState(def TableDef, tablesDir string, migrate bool) (*
 		}
 	}
 
+	w.fsync = &e.fsync
 	return &tableState{heap: heap, wal: w}, nil
 }
 
@@ -364,6 +369,7 @@ func (e *engine) CreateTable(name string, columns []ColumnDef) error {
 		return fmt.Errorf("create table WAL: %w", err)
 	}
 
+	w.fsync = &e.fsync
 	def := *e.catalog.tables[name]
 	e.tableStates[name] = &tableState{
 		heap: newTableHeap(def),
@@ -1040,6 +1046,14 @@ func migrateLegacyWALVersion(path string) error {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func (e *engine) SetFsync(enabled bool) {
+	e.fsync.Store(enabled)
+}
+
+func (e *engine) GetFsync() bool {
+	return e.fsync.Load()
 }
 
 // SplitWALMigrationNeededError is returned when the data directory

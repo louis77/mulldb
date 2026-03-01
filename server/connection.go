@@ -169,6 +169,7 @@ func (c *Connection) handleQuery(query string) error {
 	// doesn't cover SET, so we return a stub response.
 	if strings.HasPrefix(upper, "SET") {
 		c.handleSetTrace(upper)
+		c.handleSetFsync(upper)
 		if err := c.writer.WriteCommandComplete("SET"); err != nil {
 			return err
 		}
@@ -181,6 +182,20 @@ func (c *Connection) handleQuery(query string) error {
 	// Handle SHOW TRACE — return the stored trace from the last traced statement.
 	if upper == "SHOW TRACE" {
 		result := executor.TraceToResult(c.lastTrace)
+		return c.sendResult(result, query)
+	}
+
+	// Handle SHOW FSYNC — return the current fsync setting.
+	if upper == "SHOW FSYNC" {
+		val := "on"
+		if !c.exec.GetFsync() {
+			val = "off"
+		}
+		result := &executor.Result{
+			Columns: []executor.Column{{Name: "fsync", TypeOID: executor.OIDText, TypeSize: -1}},
+			Rows:    [][][]byte{{[]byte(val)}},
+			Tag:     "SHOW",
+		}
 		return c.sendResult(result, query)
 	}
 
@@ -270,6 +285,22 @@ func (c *Connection) handleSetTrace(upper string) {
 		strings.HasPrefix(normalized, "SET TRACE TO OFF"):
 		c.traceEnabled = false
 		c.lastTrace = nil
+	}
+}
+
+// handleSetFsync checks if the SET command is "SET FSYNC = ON/OFF" and
+// updates the engine's fsync setting accordingly.
+func (c *Connection) handleSetFsync(upper string) {
+	normalized := strings.Join(strings.Fields(upper), " ")
+	switch {
+	case strings.HasPrefix(normalized, "SET FSYNC = ON"),
+		strings.HasPrefix(normalized, "SET FSYNC=ON"),
+		strings.HasPrefix(normalized, "SET FSYNC TO ON"):
+		c.exec.SetFsync(true)
+	case strings.HasPrefix(normalized, "SET FSYNC = OFF"),
+		strings.HasPrefix(normalized, "SET FSYNC=OFF"),
+		strings.HasPrefix(normalized, "SET FSYNC TO OFF"):
+		c.exec.SetFsync(false)
 	}
 }
 
