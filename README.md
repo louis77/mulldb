@@ -34,6 +34,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - [Project Structure](#project-structure)
 - [Testing](#testing)
 - [Error Handling](#error-handling)
+- [Compatibility No-Ops](#compatibility-no-ops)
 - [Limitations](#limitations)
 - [License](#license)
 
@@ -1054,6 +1055,17 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 | `22012` | Division by zero | `SELECT 1 / 0` |
 | `42704` | Undefined object | `DROP INDEX nonexistent ON t` |
 | `0A000` | Feature not supported | ORDER BY with aggregates (no GROUP BY) |
+
+## Compatibility No-Ops
+
+Some SQL commands are accepted and silently acknowledged without performing any action. This ensures compatibility with clients like `psql` and PostgreSQL drivers that send these commands automatically.
+
+| Command | Reason |
+|---------|--------|
+| `SET <param> = <value>` | `psql` sends `SET client_encoding`, `SET standard_conforming_strings`, etc. during startup. Only `SET TRACE` and `SET FSYNC` have real effects; all others are acknowledged as no-ops. |
+| `SAVEPOINT <name>` | `psql` sends implicit savepoints when `ON_ERROR_ROLLBACK` is enabled. Accepted but no savepoint is actually created. |
+| `RELEASE SAVEPOINT <name>` | Companion to `SAVEPOINT`. Accepted but no savepoint is released. |
+| `ROLLBACK TO SAVEPOINT <name>` | Companion to `SAVEPOINT`. Accepted but does not roll back to any savepoint — the full transaction state is preserved as-is. |
 
 ## Limitations
 
