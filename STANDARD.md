@@ -53,8 +53,8 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | ID | Feature | Status |
 |----|---------|--------|
 | E051-01 | SELECT DISTINCT | Open |
-| E051-02 | GROUP BY clause | Open |
-| E051-04 | GROUP BY can contain columns not in select list | Open |
+| E051-02 | GROUP BY clause | **Done** (single-table, column references only; no JOINs or expression grouping) |
+| E051-04 | GROUP BY can contain columns not in select list | **Done** |
 | E051-05 | Select list items can be renamed (AS) | **Done** |
 | E051-06 | HAVING clause | Open |
 | E051-07 | Qualified `*` in select list (e.g. `t.*`) | Open |

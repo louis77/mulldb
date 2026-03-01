@@ -3398,3 +3398,238 @@ func TestExecutor_ShowMemory_HumanBytes(t *testing.T) {
 		}
 	}
 }
+
+// -------------------------------------------------------------------------
+// GROUP BY tests
+// -------------------------------------------------------------------------
+
+func setupSales(t *testing.T) *Executor {
+	t.Helper()
+	e := setup(t)
+	exec(t, e, "CREATE TABLE sales (category TEXT, region TEXT, amount INTEGER)")
+	exec(t, e, "INSERT INTO sales VALUES ('A', 'east', 10), ('A', 'west', 20), ('B', 'east', 30), ('A', 'east', 40)")
+	return e
+}
+
+func TestExecutor_GroupBy_SingleColumn(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, SUM(amount) FROM sales GROUP BY category ORDER BY category")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "A" || string(r.Rows[0][1]) != "70" {
+		t.Errorf("row0 = [%s, %s], want [A, 70]", r.Rows[0][0], r.Rows[0][1])
+	}
+	if string(r.Rows[1][0]) != "B" || string(r.Rows[1][1]) != "30" {
+		t.Errorf("row1 = [%s, %s], want [B, 30]", r.Rows[1][0], r.Rows[1][1])
+	}
+}
+
+func TestExecutor_GroupBy_MultipleColumns(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, region, COUNT(*) FROM sales GROUP BY category, region ORDER BY category, region")
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+	// A|east|2, A|west|1, B|east|1
+	want := [][3]string{{"A", "east", "2"}, {"A", "west", "1"}, {"B", "east", "1"}}
+	for i, w := range want {
+		got := [3]string{string(r.Rows[i][0]), string(r.Rows[i][1]), string(r.Rows[i][2])}
+		if got != w {
+			t.Errorf("row%d = %v, want %v", i, got, w)
+		}
+	}
+}
+
+func TestExecutor_GroupBy_NoAggregate(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category FROM sales GROUP BY category ORDER BY category")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "A" {
+		t.Errorf("row0 = %q, want A", r.Rows[0][0])
+	}
+	if string(r.Rows[1][0]) != "B" {
+		t.Errorf("row1 = %q, want B", r.Rows[1][0])
+	}
+}
+
+func TestExecutor_GroupBy_WithWhere(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, SUM(amount) FROM sales WHERE region = 'east' GROUP BY category ORDER BY category")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "A" || string(r.Rows[0][1]) != "50" {
+		t.Errorf("row0 = [%s, %s], want [A, 50]", r.Rows[0][0], r.Rows[0][1])
+	}
+	if string(r.Rows[1][0]) != "B" || string(r.Rows[1][1]) != "30" {
+		t.Errorf("row1 = [%s, %s], want [B, 30]", r.Rows[1][0], r.Rows[1][1])
+	}
+}
+
+func TestExecutor_GroupBy_WithLimit(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, SUM(amount) FROM sales GROUP BY category ORDER BY category LIMIT 1")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "A" {
+		t.Errorf("row0[0] = %q, want A", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_GroupBy_WithOffset(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, SUM(amount) FROM sales GROUP BY category ORDER BY category OFFSET 1")
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "B" {
+		t.Errorf("row0[0] = %q, want B", r.Rows[0][0])
+	}
+}
+
+func TestExecutor_GroupBy_OrderByDesc(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, SUM(amount) FROM sales GROUP BY category ORDER BY category DESC")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	if string(r.Rows[0][0]) != "B" {
+		t.Errorf("row0[0] = %q, want B", r.Rows[0][0])
+	}
+	if string(r.Rows[1][0]) != "A" {
+		t.Errorf("row1[0] = %q, want A", r.Rows[1][0])
+	}
+}
+
+func TestExecutor_GroupBy_MultipleAggregates(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, COUNT(*), SUM(amount), MIN(amount), MAX(amount) FROM sales GROUP BY category ORDER BY category")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	// A: count=3, sum=70, min=10, max=40
+	if string(r.Rows[0][1]) != "3" || string(r.Rows[0][2]) != "70" || string(r.Rows[0][3]) != "10" || string(r.Rows[0][4]) != "40" {
+		t.Errorf("A row = [%s %s %s %s], want [3 70 10 40]", r.Rows[0][1], r.Rows[0][2], r.Rows[0][3], r.Rows[0][4])
+	}
+	// B: count=1, sum=30, min=30, max=30
+	if string(r.Rows[1][1]) != "1" || string(r.Rows[1][2]) != "30" || string(r.Rows[1][3]) != "30" || string(r.Rows[1][4]) != "30" {
+		t.Errorf("B row = [%s %s %s %s], want [1 30 30 30]", r.Rows[1][1], r.Rows[1][2], r.Rows[1][3], r.Rows[1][4])
+	}
+}
+
+func TestExecutor_GroupBy_NonGroupColumnError(t *testing.T) {
+	e := setupSales(t)
+	_, err := e.Execute("SELECT category, region FROM sales GROUP BY category")
+	if err == nil {
+		t.Fatal("expected error for non-GROUP BY column in SELECT")
+	}
+	qe, ok := err.(*QueryError)
+	if !ok || qe.Code != "42803" {
+		t.Errorf("error = %v, want SQLSTATE 42803", err)
+	}
+}
+
+func TestExecutor_GroupBy_JoinError(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE a (id INTEGER)")
+	exec(t, e, "CREATE TABLE b (id INTEGER)")
+	_, err := e.Execute("SELECT a.id FROM a JOIN b ON a.id = b.id GROUP BY a.id")
+	if err == nil {
+		t.Fatal("expected error for GROUP BY with JOIN")
+	}
+	qe, ok := err.(*QueryError)
+	if !ok || qe.Code != "0A000" {
+		t.Errorf("error = %v, want SQLSTATE 0A000", err)
+	}
+}
+
+func TestExecutor_GroupBy_NullGrouping(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (cat TEXT, val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES ('A', 1)")
+	exec(t, e, "INSERT INTO t (cat, val) VALUES (NULL, 2)")
+	exec(t, e, "INSERT INTO t (cat, val) VALUES (NULL, 3)")
+
+	r := exec(t, e, "SELECT cat, SUM(val) FROM t GROUP BY cat ORDER BY cat")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	// A|1, NULL|5  (NULLs sort last)
+	if string(r.Rows[0][0]) != "A" || string(r.Rows[0][1]) != "1" {
+		t.Errorf("row0 = [%s, %s], want [A, 1]", r.Rows[0][0], r.Rows[0][1])
+	}
+	if r.Rows[1][0] != nil {
+		t.Errorf("row1[0] = %q, want NULL", r.Rows[1][0])
+	}
+	if string(r.Rows[1][1]) != "5" {
+		t.Errorf("row1[1] = %q, want 5", r.Rows[1][1])
+	}
+}
+
+func TestExecutor_GroupBy_Avg(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category, AVG(amount) FROM sales GROUP BY category ORDER BY category")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	// A: avg = (10+20+40)/3 = 23.333...
+	// Check that it's a float
+	avgA := string(r.Rows[0][1])
+	if avgA[:5] != "23.33" {
+		t.Errorf("AVG(A) = %q, want ~23.33...", avgA)
+	}
+	// B: avg = 30/1 = 30.0
+	if string(r.Rows[1][1]) != "30" {
+		t.Errorf("AVG(B) = %q, want 30", r.Rows[1][1])
+	}
+}
+
+func TestExecutor_GroupBy_CountColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (cat TEXT, val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES ('A', 1)")
+	exec(t, e, "INSERT INTO t VALUES ('A', NULL)")
+	exec(t, e, "INSERT INTO t VALUES ('B', 2)")
+
+	r := exec(t, e, "SELECT cat, COUNT(val) FROM t GROUP BY cat ORDER BY cat")
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+	// A: COUNT(val) = 1 (NULLs not counted)
+	if string(r.Rows[0][1]) != "1" {
+		t.Errorf("COUNT(A) = %q, want 1", r.Rows[0][1])
+	}
+	if string(r.Rows[1][1]) != "1" {
+		t.Errorf("COUNT(B) = %q, want 1", r.Rows[1][1])
+	}
+}
+
+func TestExecutor_GroupBy_Alias(t *testing.T) {
+	e := setupSales(t)
+	r := exec(t, e, "SELECT category AS cat, SUM(amount) AS total FROM sales GROUP BY category ORDER BY category")
+	if r.Columns[0].Name != "cat" {
+		t.Errorf("col0 name = %q, want cat", r.Columns[0].Name)
+	}
+	if r.Columns[1].Name != "total" {
+		t.Errorf("col1 name = %q, want total", r.Columns[1].Name)
+	}
+	if len(r.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_GroupBy_StarError(t *testing.T) {
+	e := setupSales(t)
+	_, err := e.Execute("SELECT * FROM sales GROUP BY category")
+	if err == nil {
+		t.Fatal("expected error for SELECT * with GROUP BY")
+	}
+	qe, ok := err.(*QueryError)
+	if !ok || qe.Code != "42803" {
+		t.Errorf("error = %v, want SQLSTATE 42803", err)
+	}
+}

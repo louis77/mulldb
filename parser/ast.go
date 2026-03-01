@@ -88,7 +88,7 @@ type OrderByClause struct {
 	Desc   bool   // true = DESC, false = ASC (default)
 }
 
-// SelectStmt: SELECT <cols> FROM <table> [INDEXED BY <name>] [JOIN ...] [WHERE <expr>] [ORDER BY ...] [LIMIT n] [OFFSET n]
+// SelectStmt: SELECT <cols> FROM <table> [INDEXED BY <name>] [JOIN ...] [WHERE <expr>] [GROUP BY ...] [ORDER BY ...] [LIMIT n] [OFFSET n]
 type SelectStmt struct {
 	Columns   []Expr // StarExpr for *, ColumnRef for named columns
 	From      TableRef
@@ -96,6 +96,7 @@ type SelectStmt struct {
 	IndexedBy string          // "" when not specified
 	Joins     []JoinClause    // nil when no joins
 	Where     Expr            // nil when no WHERE clause
+	GroupBy   []Expr          // nil when no GROUP BY clause
 	OrderBy   []OrderByClause // nil when no ORDER BY clause
 	Limit     *int64          // nil = no limit
 	Offset    *int64          // nil = no offset

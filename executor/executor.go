@@ -367,6 +367,11 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		return execSelectStatic(s.Columns)
 	}
 
+	// Reject GROUP BY with JOINs early.
+	if len(s.GroupBy) > 0 && len(s.Joins) > 0 {
+		return nil, &QueryError{Code: "0A000", Message: "GROUP BY is not supported with JOINs"}
+	}
+
 	// Branch to join execution if joins are present.
 	if len(s.Joins) > 0 {
 		return e.execSelectJoin(s, tr)
@@ -415,6 +420,9 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 		} else {
 			hasNonAgg = true
 		}
+	}
+	if len(s.GroupBy) > 0 {
+		return e.execSelectGroupBy(s, def, hasAgg, tr)
 	}
 	if hasAgg && hasNonAgg {
 		return nil, &QueryError{
@@ -973,6 +981,512 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		Columns: resultCols,
 		Rows:    rows,
 		Tag:     fmt.Sprintf("SELECT %d", len(rows)),
+	}, nil
+}
+
+// execSelectGroupBy handles SELECT ... GROUP BY ...
+func (e *Executor) execSelectGroupBy(s *parser.SelectStmt, def *storage.TableDef, hasAgg bool, tr *Trace) (*Result, error) {
+	var planStart time.Time
+	if tr != nil {
+		planStart = time.Now()
+	}
+
+	// Validate LIMIT/OFFSET values.
+	if s.Limit != nil && *s.Limit < 0 {
+		return nil, &QueryError{Code: "2201W", Message: "LIMIT must not be negative"}
+	}
+	if s.Offset != nil && *s.Offset < 0 {
+		return nil, &QueryError{Code: "2201X", Message: "OFFSET must not be negative"}
+	}
+
+	// Resolve GROUP BY columns to ordinals.
+	type groupCol struct {
+		name    string
+		ordinal int
+	}
+	var groupCols []groupCol
+	for _, expr := range s.GroupBy {
+		ref, ok := expr.(*parser.ColumnRef)
+		if !ok {
+			return nil, &QueryError{Code: "42803", Message: "GROUP BY expressions must be column references"}
+		}
+		idx := columnIndex(def, ref.Name)
+		if idx < 0 {
+			return nil, WrapError(fmt.Errorf("column %q not found in table %q", ref.Name, def.Name))
+		}
+		groupCols = append(groupCols, groupCol{name: ref.Name, ordinal: idx})
+	}
+
+	// Build a set of GROUP BY column names for validation.
+	groupByNames := make(map[string]bool)
+	for _, gc := range groupCols {
+		groupByNames[strings.ToLower(gc.name)] = true
+	}
+
+	isAggFunc := func(name string) bool {
+		switch name {
+		case "COUNT", "SUM", "MIN", "MAX", "AVG":
+			return true
+		}
+		return false
+	}
+
+	// aggAcc is a per-group aggregate accumulator.
+	type aggAcc struct {
+		funcName     string
+		colIdx       int // -1 for COUNT(*)
+		inputType    storage.DataType
+		count        int64
+		sumI         int64
+		sumF         float64
+		minV         any
+		maxV         any
+		hasV         bool
+		countNonNull int64
+	}
+
+	// Describe each SELECT column: is it a group-by ref or an aggregate?
+	type selectCol struct {
+		isAgg    bool
+		groupIdx int // index into groupCols (when !isAgg)
+		aggTmpl  aggAcc
+		alias    string
+	}
+
+	var selectCols []selectCol
+	var resultCols []Column
+
+	for _, expr := range s.Columns {
+		alias := ""
+		inner := expr
+		if a, ok := inner.(*parser.AliasExpr); ok {
+			alias = a.Alias
+			inner = a.Expr
+		}
+
+		if fn, ok := inner.(*parser.FunctionCallExpr); ok && isAggFunc(fn.Name) {
+			tmpl := aggAcc{funcName: fn.Name, colIdx: -1}
+			if len(fn.Args) == 1 {
+				switch arg := fn.Args[0].(type) {
+				case *parser.StarExpr:
+					tmpl.colIdx = -1
+				case *parser.ColumnRef:
+					idx := columnIndex(def, arg.Name)
+					if idx < 0 {
+						return nil, WrapError(fmt.Errorf("column %q not found in table %q", arg.Name, def.Name))
+					}
+					tmpl.colIdx = idx
+					tmpl.inputType = columnByOrdinal(def, idx).DataType
+				}
+			}
+			// Validate aggregate argument types.
+			switch fn.Name {
+			case "SUM":
+				if tmpl.colIdx < 0 {
+					return nil, &QueryError{Code: "42883", Message: "SUM requires a column argument"}
+				}
+				if tmpl.inputType != storage.TypeInteger && tmpl.inputType != storage.TypeFloat {
+					return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("SUM: column must be INTEGER or FLOAT, got %s", tmpl.inputType)}
+				}
+			case "AVG":
+				if tmpl.colIdx < 0 {
+					return nil, &QueryError{Code: "42883", Message: "AVG requires a column argument"}
+				}
+				if tmpl.inputType != storage.TypeInteger && tmpl.inputType != storage.TypeFloat {
+					return nil, &QueryError{Code: "42883", Message: fmt.Sprintf("AVG: column must be INTEGER or FLOAT, got %s", tmpl.inputType)}
+				}
+			case "MIN", "MAX":
+				if tmpl.colIdx < 0 {
+					return nil, &QueryError{Code: "42883", Message: fn.Name + " requires a column argument"}
+				}
+			case "COUNT":
+				// COUNT(*) or COUNT(col) — both valid
+			}
+			colName := strings.ToLower(fn.Name)
+			if alias != "" {
+				colName = alias
+			}
+			selectCols = append(selectCols, selectCol{isAgg: true, aggTmpl: tmpl, alias: alias})
+			resultCols = append(resultCols, Column{
+				Name:     colName,
+				TypeOID:  aggregateTypeOID(fn.Name, tmpl.inputType),
+				TypeSize: aggregateTypeSize(fn.Name, tmpl.inputType),
+			})
+		} else if ref, ok := inner.(*parser.ColumnRef); ok {
+			if !groupByNames[strings.ToLower(ref.Name)] {
+				return nil, &QueryError{
+					Code:    "42803",
+					Message: fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", ref.Name),
+				}
+			}
+			gIdx := -1
+			for i, gc := range groupCols {
+				if strings.EqualFold(gc.name, ref.Name) {
+					gIdx = i
+					break
+				}
+			}
+			c := columnByOrdinal(def, groupCols[gIdx].ordinal)
+			colName := c.Name
+			if alias != "" {
+				colName = alias
+			}
+			selectCols = append(selectCols, selectCol{isAgg: false, groupIdx: gIdx, alias: alias})
+			resultCols = append(resultCols, Column{
+				Name:     colName,
+				TypeOID:  typeOID(c.DataType),
+				TypeSize: typeSize(c.DataType),
+			})
+		} else if _, ok := inner.(*parser.StarExpr); ok {
+			return nil, &QueryError{
+				Code:    "42803",
+				Message: "SELECT * is not allowed with GROUP BY",
+			}
+		} else {
+			return nil, &QueryError{
+				Code:    "42803",
+				Message: "non-aggregate expressions in SELECT must be column references that appear in GROUP BY",
+			}
+		}
+	}
+
+	// Validate ORDER BY columns.
+	type orderKey struct {
+		groupIdx int // index into groupCols, or -1 for result column alias
+		colIdx   int // result column index (for alias-based ordering)
+		desc     bool
+	}
+	var orderKeys []orderKey
+	for _, ob := range s.OrderBy {
+		// Check if it matches a GROUP BY column by name.
+		found := false
+		for i, gc := range groupCols {
+			if strings.EqualFold(gc.name, ob.Column) {
+				orderKeys = append(orderKeys, orderKey{groupIdx: i, colIdx: -1, desc: ob.Desc})
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Check if it matches a result column alias.
+			for i, sc := range selectCols {
+				if strings.EqualFold(sc.alias, ob.Column) {
+					orderKeys = append(orderKeys, orderKey{groupIdx: -1, colIdx: i, desc: ob.Desc})
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return nil, &QueryError{
+				Code:    "42803",
+				Message: fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", ob.Column),
+			}
+		}
+	}
+
+	// Build WHERE filter.
+	var filter func(storage.Row) bool
+	if s.Where != nil {
+		var ferr error
+		filter, ferr = buildFilter(s.Where, def)
+		if ferr != nil {
+			return nil, WrapError(ferr)
+		}
+	}
+
+	if tr != nil {
+		tr.Plan = time.Since(planStart)
+	}
+
+	var execStart time.Time
+	if tr != nil {
+		execStart = time.Now()
+	}
+
+	// Group map: string key → group state.
+	type group struct {
+		keyVals []any    // one value per groupCol
+		accs    []aggAcc // one per aggregate selectCol
+	}
+	groups := make(map[string]*group)
+	var groupOrder []string // insertion order for deterministic output
+
+	const nullSentinel = "\x00NULL"
+	const sep = "\x1f"
+
+	buildKey := func(row storage.Row) string {
+		if len(groupCols) == 1 {
+			v := storage.RowValue(row.Values, groupCols[0].ordinal)
+			if v == nil {
+				return nullSentinel
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		var b strings.Builder
+		for i, gc := range groupCols {
+			if i > 0 {
+				b.WriteString(sep)
+			}
+			v := storage.RowValue(row.Values, gc.ordinal)
+			if v == nil {
+				b.WriteString(nullSentinel)
+			} else {
+				fmt.Fprintf(&b, "%v", v)
+			}
+		}
+		return b.String()
+	}
+
+	newGroup := func(row storage.Row) *group {
+		g := &group{
+			keyVals: make([]any, len(groupCols)),
+		}
+		for i, gc := range groupCols {
+			g.keyVals[i] = storage.RowValue(row.Values, gc.ordinal)
+		}
+		// Create accumulators for aggregate columns.
+		for _, sc := range selectCols {
+			if sc.isAgg {
+				g.accs = append(g.accs, sc.aggTmpl) // copy the template
+			}
+		}
+		return g
+	}
+
+	accumulate := func(g *group, row storage.Row) {
+		for i := range g.accs {
+			acc := &g.accs[i]
+			switch acc.funcName {
+			case "COUNT":
+				if acc.colIdx < 0 || storage.RowValue(row.Values, acc.colIdx) != nil {
+					acc.count++
+				}
+			case "SUM":
+				val := storage.RowValue(row.Values, acc.colIdx)
+				switch v := val.(type) {
+				case int64:
+					acc.sumI += v
+				case float64:
+					acc.sumF += v
+				}
+			case "MIN":
+				v := storage.RowValue(row.Values, acc.colIdx)
+				if v != nil {
+					if !acc.hasV || storage.CompareValues(v, acc.minV) < 0 {
+						acc.minV = v
+						acc.hasV = true
+					}
+				}
+			case "MAX":
+				v := storage.RowValue(row.Values, acc.colIdx)
+				if v != nil {
+					if !acc.hasV || storage.CompareValues(v, acc.maxV) > 0 {
+						acc.maxV = v
+						acc.hasV = true
+					}
+				}
+			case "AVG":
+				val := storage.RowValue(row.Values, acc.colIdx)
+				switch v := val.(type) {
+				case int64:
+					acc.sumI += v
+					acc.countNonNull++
+				case float64:
+					acc.sumF += v
+					acc.countNonNull++
+				}
+			}
+		}
+	}
+
+	addRow := func(row storage.Row) {
+		key := buildKey(row)
+		g, exists := groups[key]
+		if !exists {
+			g = newGroup(row)
+			groups[key] = g
+			groupOrder = append(groupOrder, key)
+		}
+		accumulate(g, row)
+	}
+
+	// Try index lookups.
+	isCatalog := isCatalogTable(s.From.Schema, s.From.Name)
+	var scanned int64
+	var usedIndex string
+
+	if !isCatalog && s.Where != nil {
+		if row, ok := e.tryPKLookup(s.Where, def); ok {
+			usedIndex = "PRIMARY"
+			scanned = 1
+			if filter == nil || filter(*row) {
+				addRow(*row)
+			}
+		}
+		if usedIndex == "" && s.IndexedBy != "" {
+			rows, ierr := e.lookupByNamedIndex(s.IndexedBy, s.Where, def)
+			if ierr != nil {
+				return nil, ierr
+			}
+			usedIndex = s.IndexedBy
+			for _, row := range rows {
+				scanned++
+				if filter != nil && !filter(row) {
+					continue
+				}
+				addRow(row)
+			}
+		}
+	}
+
+	if usedIndex == "" {
+		var it storage.RowIterator
+		var err error
+		if isCatalog {
+			it, err = scanCatalogTable(s.From.Schema, s.From.Name, e.engine)
+		} else {
+			it, err = e.engine.Scan(s.From.Name)
+		}
+		if err != nil {
+			return nil, WrapError(err)
+		}
+		defer it.Close()
+		for {
+			row, ok := it.Next()
+			if !ok {
+				break
+			}
+			scanned++
+			if filter != nil && !filter(row) {
+				continue
+			}
+			addRow(row)
+		}
+	}
+
+	if tr != nil && usedIndex != "" {
+		tr.IndexName = usedIndex
+	}
+
+	// Build result entries from groups.
+	type resultEntry struct {
+		vals []any // one per selectCol
+	}
+	entries := make([]resultEntry, 0, len(groupOrder))
+	for _, key := range groupOrder {
+		g := groups[key]
+		row := make([]any, len(selectCols))
+		aggIdx := 0
+		for i, sc := range selectCols {
+			if sc.isAgg {
+				acc := &g.accs[aggIdx]
+				aggIdx++
+				switch acc.funcName {
+				case "COUNT":
+					row[i] = acc.count
+				case "SUM":
+					if acc.inputType == storage.TypeFloat {
+						row[i] = acc.sumF
+					} else {
+						row[i] = acc.sumI
+					}
+				case "MIN":
+					row[i] = acc.minV
+				case "MAX":
+					row[i] = acc.maxV
+				case "AVG":
+					if acc.countNonNull == 0 {
+						row[i] = nil
+					} else if acc.inputType == storage.TypeFloat {
+						row[i] = acc.sumF / float64(acc.countNonNull)
+					} else {
+						row[i] = float64(acc.sumI) / float64(acc.countNonNull)
+					}
+				}
+			} else {
+				row[i] = g.keyVals[sc.groupIdx]
+			}
+		}
+		entries = append(entries, resultEntry{vals: row})
+	}
+
+	// ORDER BY on group results.
+	if len(orderKeys) > 0 {
+		sort.SliceStable(entries, func(i, j int) bool {
+			for _, ok := range orderKeys {
+				var vi, vj any
+				if ok.groupIdx >= 0 {
+					for si, sc := range selectCols {
+						if !sc.isAgg && sc.groupIdx == ok.groupIdx {
+							vi = entries[i].vals[si]
+							vj = entries[j].vals[si]
+							break
+						}
+					}
+				} else {
+					vi = entries[i].vals[ok.colIdx]
+					vj = entries[j].vals[ok.colIdx]
+				}
+
+				// NULLs always sort last.
+				if vi == nil && vj == nil {
+					continue
+				}
+				if vi == nil {
+					return false
+				}
+				if vj == nil {
+					return true
+				}
+
+				cmp := storage.CompareValues(vi, vj)
+				if cmp == 0 {
+					continue
+				}
+				if ok.desc {
+					return cmp > 0
+				}
+				return cmp < 0
+			}
+			return false
+		})
+	}
+
+	// Apply OFFSET and LIMIT.
+	start := int64(0)
+	if s.Offset != nil {
+		start = *s.Offset
+	}
+	if start > int64(len(entries)) {
+		start = int64(len(entries))
+	}
+	end := int64(len(entries))
+	if s.Limit != nil && start+*s.Limit < end {
+		end = start + *s.Limit
+	}
+	entries = entries[start:end]
+
+	// Format result rows.
+	resultRows := make([][][]byte, 0, len(entries))
+	for _, entry := range entries {
+		textRow := make([][]byte, len(entry.vals))
+		for i, v := range entry.vals {
+			textRow[i] = formatValue(v)
+		}
+		resultRows = append(resultRows, textRow)
+	}
+
+	if tr != nil {
+		tr.RowsScanned = scanned
+		tr.RowsReturned = int64(len(resultRows))
+		tr.Exec = time.Since(execStart)
+	}
+
+	return &Result{
+		Columns: resultCols,
+		Rows:    resultRows,
+		Tag:     fmt.Sprintf("SELECT %d", len(resultRows)),
 	}, nil
 }
 

@@ -249,7 +249,7 @@ Output format is always `2024-01-15 10:30:00+00`. The `NOW()` function returns t
 
 ### Aggregate Functions
 
-Aggregate functions collapse all matching rows into a single result row. Multiple aggregates can appear in the same `SELECT`. Mixing aggregate and non-aggregate columns in the same `SELECT` is an error (SQLSTATE `42803`) — `GROUP BY` is not supported.
+Aggregate functions collapse all matching rows into a single result row. Multiple aggregates can appear in the same `SELECT`. Mixing aggregate and non-aggregate columns in the same `SELECT` is an error (SQLSTATE `42803`) — use `GROUP BY` to aggregate per group instead.
 
 Aggregate queries support index acceleration: primary key lookups are automatic when the WHERE clause is a simple PK equality, and secondary indexes can be used via `INDEXED BY <name>`. Without an applicable index, aggregates fall back to a full table scan.
 
@@ -296,6 +296,39 @@ SELECT COUNT(*), SUM(amount), AVG(amount), MIN(amount), MAX(amount) FROM orders;
 --      4 |  80 |  20 |   5 |  40
 ```
 
+### GROUP BY
+
+`GROUP BY` partitions rows into groups based on one or more columns, then applies aggregate functions to each group independently. Non-aggregate columns in `SELECT` must appear in the `GROUP BY` clause (SQLSTATE `42803`).
+
+Supports `WHERE` (pre-grouping filter), `ORDER BY`, `LIMIT`, and `OFFSET`. NULLs are grouped together per the SQL standard. `HAVING` is not yet supported. GROUP BY with JOINs returns SQLSTATE `0A000`.
+
+**Examples:**
+
+```sql
+CREATE TABLE sales (category TEXT, region TEXT, amount INTEGER);
+INSERT INTO sales VALUES ('A', 'east', 10), ('A', 'west', 20), ('B', 'east', 30), ('A', 'east', 40);
+
+SELECT category, SUM(amount) FROM sales GROUP BY category ORDER BY category;
+--  category | sum
+-- ----------+-----
+--  A        |  70
+--  B        |  30
+
+SELECT category, region, COUNT(*) FROM sales GROUP BY category, region ORDER BY category, region;
+--  category | region | count
+-- ----------+--------+-------
+--  A        | east   |     2
+--  A        | west   |     1
+--  B        | east   |     1
+
+-- GROUP BY without aggregates returns distinct groups:
+SELECT category FROM sales GROUP BY category ORDER BY category;
+--  category
+-- ----------
+--  A
+--  B
+```
+
 ### Column Aliases (AS)
 
 Any column expression in a `SELECT` can be renamed with `AS <alias>`. This works with plain columns, aggregate functions, and static expressions.
@@ -330,7 +363,7 @@ SELECT 1 AS num, 'hello' AS greeting;
 
 NULL values always sort last, regardless of sort direction.
 
-ORDER BY is applied before LIMIT and OFFSET, making it possible to get deterministic paginated results. ORDER BY is not supported with aggregate queries (no GROUP BY yet).
+ORDER BY is applied before LIMIT and OFFSET, making it possible to get deterministic paginated results. ORDER BY is not supported with aggregate queries without GROUP BY. With GROUP BY, ORDER BY works on the grouped result columns.
 
 **Examples:**
 

@@ -546,6 +546,26 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 
+	// Parse optional GROUP BY col [, col, ...]
+	var groupBy []Expr
+	if p.cur.Type == TokenGroup {
+		p.next() // consume GROUP
+		if _, err := p.expect(TokenBy); err != nil {
+			return nil, err
+		}
+		for {
+			expr, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			groupBy = append(groupBy, expr)
+			if p.cur.Type != TokenComma {
+				break
+			}
+			p.next() // consume comma
+		}
+	}
+
 	// Parse optional ORDER BY col [ASC|DESC] [, col [ASC|DESC], ...]
 	var orderBy []OrderByClause
 	if p.cur.Type == TokenOrder {
@@ -620,6 +640,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		IndexedBy: indexedBy,
 		Joins:     joins,
 		Where:     where,
+		GroupBy:   groupBy,
 		OrderBy:   orderBy,
 		Limit:     limit,
 		Offset:    offset,

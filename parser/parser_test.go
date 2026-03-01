@@ -2201,3 +2201,41 @@ func TestParse_ShowUnknown(t *testing.T) {
 		t.Error("expected error for SHOW TABLES")
 	}
 }
+
+func TestParse_GroupBy(t *testing.T) {
+	stmt, err := Parse("SELECT category, COUNT(*) FROM sales GROUP BY category")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.GroupBy) != 1 {
+		t.Fatalf("GroupBy = %d, want 1", len(sel.GroupBy))
+	}
+	ref, ok := sel.GroupBy[0].(*ColumnRef)
+	if !ok {
+		t.Fatalf("GroupBy[0] type = %T, want *ColumnRef", sel.GroupBy[0])
+	}
+	if ref.Name != "category" {
+		t.Errorf("GroupBy[0].Name = %q, want category", ref.Name)
+	}
+}
+
+func TestParse_GroupByMultiple(t *testing.T) {
+	stmt, err := Parse("SELECT category, region, SUM(amount) FROM sales GROUP BY category, region ORDER BY category")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.GroupBy) != 2 {
+		t.Fatalf("GroupBy = %d, want 2", len(sel.GroupBy))
+	}
+	if sel.GroupBy[0].(*ColumnRef).Name != "category" {
+		t.Errorf("GroupBy[0] = %q, want category", sel.GroupBy[0].(*ColumnRef).Name)
+	}
+	if sel.GroupBy[1].(*ColumnRef).Name != "region" {
+		t.Errorf("GroupBy[1] = %q, want region", sel.GroupBy[1].(*ColumnRef).Name)
+	}
+	if len(sel.OrderBy) != 1 {
+		t.Fatalf("OrderBy = %d, want 1", len(sel.OrderBy))
+	}
+}

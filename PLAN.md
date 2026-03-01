@@ -348,7 +348,7 @@ The following features are **required** to move from "correct prototype" to "min
 | Priority | Feature | Gap Analysis | Implementation Notes |
 |----------|---------|--------------|---------------------|
 | P1 | **Subqueries** (`IN (SELECT ...)`, `EXISTS`, correlated) | `IN` with value lists is implemented; subquery form (`IN (SELECT ...)`) is not. Cannot express "find orders where total > avg" or "users in CA". Parser rejects subqueries entirely. | Requires AST nodes for subqueries, executor support for correlated evaluation (row-by-row subquery execution) or unnesting. |
-| P1 | **GROUP BY + HAVING** | Aggregates only work on full table. Cannot do "sales per category" or "categories with >5 items". | Need grouping operator in executor, hash-based or sort-based aggregation, HAVING filter post-aggregation. |
+| P1 | **GROUP BY + HAVING** | GROUP BY implemented for single-table queries with column references. HAVING not yet supported. Cannot do "categories with >5 items". | GROUP BY done (hash-based aggregation). HAVING needs post-aggregation filter. |
 | P1 | **LEFT OUTER JOIN** | Only INNER JOIN implemented. Missing rows from left table are silently dropped. | Extend parser for LEFT/RIGHT/FULL keywords, executor needs to preserve outer side rows with NULL padding. |
 | P1 | **Prepared Statements** | Only SimpleQuery protocol. No parameter binding (`$1`, `$2`). SQL injection risk, re-parsing overhead. | Need Extended Query protocol (Parse, Bind, Execute, Close), portal/cursor management, param type inference. |
 | P1 | **Savepoints** | Without transactions, partial rollback is impossible. Complex operations are all-or-nothing at statement level. | Depends on Tier 1 transactions. Need nested transaction state, partial rollback to savepoint. |
@@ -379,7 +379,7 @@ The following features are **required** to move from "correct prototype" to "min
 
 #### Phase 8: Advanced SQL
 1. Subqueries (uncorrelated first, then correlated)
-2. GROUP BY + HAVING
+2. ~~GROUP BY~~ + HAVING
 3. LEFT/RIGHT/FULL OUTER JOIN
 4. Views
 
