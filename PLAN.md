@@ -337,7 +337,7 @@ The following features are **required** to move from "correct prototype" to "min
 
 | Priority | Feature | Gap Analysis | Implementation Notes |
 |----------|---------|--------------|---------------------|
-| P0 | **ACID Transactions** | `BEGIN/COMMIT/ROLLBACK` are no-ops; every statement auto-commits. Concurrent writes to the same table can leave partial state on crash. | Need transaction manager with undo log, atomic commit protocol. Current per-table locking is insufficient for atomic multi-table operations. |
+| ~~P0~~ | ~~**ACID Transactions**~~ | ✅ Done. `BEGIN/COMMIT/ROLLBACK` with deferred-execution overlay (TxOverlay). READ COMMITTED isolation — uncommitted changes invisible to other connections. Crash-safe via WAL `opBeginTx`/`opCommitTx` markers. Multi-table atomic commits with deterministic lock ordering. | Implemented with `TxEngine` wrapper implementing `Engine` interface. DDL rejected inside transactions (SQLSTATE "25001"). Error-in-transaction state forces ROLLBACK. |
 | ~~P0~~ | ~~**Secondary Indexes**~~ | ✅ Done. `CREATE [UNIQUE] INDEX [name] ON table(column)`, `DROP INDEX name ON table`. Table-scoped names, auto-generated names, NULL handling. Explicit `INDEXED BY <name>` syntax for query acceleration (no automatic index selection). | Implemented with `MultiIndex` interface for non-unique indexes, WAL ops 8/9, rebuild on replay. |
 | ~~P0~~ | ~~**UNIQUE Constraints**~~ | ✅ Done (via `CREATE UNIQUE INDEX`). Business keys enforce uniqueness through secondary indexes. Multiple NULLs allowed per SQL standard. | Uses same B-tree infrastructure as PK indexes. Full rollback on violation. |
 | P0 | **Foreign Key Constraints** | No referential integrity checking. JOIN tables can have orphaned references. | Need FK metadata in catalog, validation on INSERT/UPDATE (parent exists), cascading actions, deferred checks. |
@@ -366,9 +366,9 @@ The following features are **required** to move from "correct prototype" to "min
 ### 📋 Recommended Implementation Roadmap
 
 #### Phase 6: Transactions & Constraints (MVP Core)
-1. Transaction manager with BEGIN/COMMIT/ROLLBACK
-2. Undo log for rollback
-3. UNIQUE and CHECK constraints
+1. ✅ Transaction manager with BEGIN/COMMIT/ROLLBACK (deferred-execution overlay)
+2. ✅ WAL opBeginTx/opCommitTx for crash-safe atomic commit
+3. CHECK constraints
 4. Foreign key constraints
 
 #### Phase 7: Indexes & Performance

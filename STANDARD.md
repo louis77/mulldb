@@ -167,8 +167,8 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | ID | Feature | Status |
 |----|---------|--------|
-| E151-01 | COMMIT statement | Open |
-| E151-02 | ROLLBACK statement | Open |
+| E151-01 | COMMIT statement | **Done** — atomic commit of buffered changes via WAL opBeginTx/opCommitTx markers |
+| E151-02 | ROLLBACK statement | **Done** — discards buffered overlay; restores state at BEGIN time |
 
 ## E152 — Basic SET TRANSACTION statement
 
@@ -373,7 +373,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 2. **Expressions**: CASE, COALESCE (arithmetic and `::` cast are done; SQL-standard `CAST(expr AS type)` not yet)
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet
-5. **Transactions**: No BEGIN / COMMIT / ROLLBACK
+5. **Transactions**: ~~No BEGIN / COMMIT / ROLLBACK~~ ✅ Done (BEGIN/COMMIT/ROLLBACK with READ COMMITTED isolation; no SAVEPOINT or SET TRANSACTION)
 6. **Data types**: No decimal, DATE, or TIME types (TIMESTAMP and FLOAT are done)
 7. **Constraints**: UNIQUE via CREATE UNIQUE INDEX; no FOREIGN KEY, CHECK, DEFAULT
 8. **Subqueries**: No subquery support anywhere

@@ -504,6 +504,7 @@ func (h *testReplayHandler) OnUpdate(table string, updates []rowUpdate) error {
 
 func (h *testReplayHandler) OnCreateIndex(string, IndexDef) error { return nil }
 func (h *testReplayHandler) OnDropIndex(string, string) error     { return nil }
+func (h *testReplayHandler) OnTxCommit([]string) error            { return nil }
 
 func TestWAL_InsertBatchRoundTrip(t *testing.T) {
 	dir := tempDir(t)

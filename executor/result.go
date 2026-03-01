@@ -100,6 +100,11 @@ func sqlstateForError(err error) string {
 		return "42704" // undefined_object
 	}
 
+	var activeTx *storage.ActiveTxError
+	if errors.As(err, &activeTx) {
+		return "25001" // active_sql_transaction
+	}
+
 	// Fallback: syntax error or general error.
 	return "42000"
 }

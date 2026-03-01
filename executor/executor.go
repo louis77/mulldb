@@ -23,6 +23,17 @@ func New(engine storage.Engine) *Executor {
 	return &Executor{engine: engine}
 }
 
+// WithEngine returns a new Executor backed by the given engine.
+// Used to create a transaction-scoped executor.
+func (e *Executor) WithEngine(eng storage.Engine) *Executor {
+	return &Executor{engine: eng}
+}
+
+// Engine returns the underlying storage engine.
+func (e *Executor) Engine() storage.Engine {
+	return e.engine
+}
+
 func (e *Executor) SetFsync(enabled bool) {
 	e.engine.SetFsync(enabled)
 }

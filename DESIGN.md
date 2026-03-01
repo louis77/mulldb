@@ -167,7 +167,7 @@ Every mutation follows the WAL-first rule: write to the log, fsync, then apply t
     └── orders.wal       # DML for "orders" table
 ```
 
-`catalog.wal` contains only DDL entries (CreateTable, DropTable). Each surviving table gets its own WAL file under `tables/` containing only DML entries (Insert, Delete, Update). DML entries still include the table name as a safety cross-check during replay.
+`catalog.wal` contains DDL entries (CreateTable, DropTable, AddColumn, DropColumn, CreateIndex, DropIndex) and transaction commit records (TxCommit). Each surviving table gets its own WAL file under `tables/` containing DML entries (Insert, Delete, Update) wrapped in transaction markers (BeginTx, CommitTx) when part of a multi-statement transaction. DML entries still include the table name as a safety cross-check during replay.
 
 This split provides three benefits: DROP TABLE instantly reclaims disk space (delete the file), concurrent writes to different tables hit different files (no contention), and per-table replay is trivially parallelizable (though currently sequential).
 
@@ -189,7 +189,7 @@ This split provides three benefits: DROP TABLE instantly reclaims disk space (de
 [uint32 totalLen][byte op][payload bytes][uint32 crc32]
 ```
 
-The length prefix allows reading entry boundaries without parsing. The CRC-32 checksum (IEEE polynomial over op + payload) catches disk corruption. The operation byte identifies the type: CreateTable, DropTable, Insert, InsertBatch, Delete, or Update.
+The length prefix allows reading entry boundaries without parsing. The CRC-32 checksum (IEEE polynomial over op + payload) catches disk corruption. The operation byte identifies the type: CreateTable, DropTable, Insert, InsertBatch, Delete, Update, AddColumn, DropColumn, CreateIndex, DropIndex, BeginTx, CommitTx, or TxCommit.
 
 **Values are encoded** with a tag-length-value scheme: a one-byte type tag followed by the value in a fixed format. The type tags are: null (0), integer (1), text (2), boolean (3), timestamp (4), float (5). Integers are 8 bytes big-endian; text is a uint16 length prefix followed by UTF-8 bytes; booleans are a single byte; timestamps are 8 bytes big-endian (microseconds since Unix epoch); floats are 8 bytes big-endian (`math.Float64bits` encoding). Big-endian encoding ensures portability across architectures.
 
@@ -330,7 +330,16 @@ Lock ordering is always catalog before table (never reversed), which prevents de
 
 The scan-snapshot design (copying rows before releasing the lock) means readers hold the table lock only briefly — just long enough to copy the data — so writes aren't blocked for long even during large SELECTs.
 
-What we don't have: transactions spanning multiple statements (each statement is atomic in isolation), or MVCC (readers see the latest committed state, not a consistent snapshot across statements).
+**Transaction isolation.** Multi-statement transactions use a deferred-execution model. All writes within a `BEGIN`/`COMMIT` block are buffered in a per-connection `TxOverlay` and only applied to the real heap on `COMMIT`. This provides READ COMMITTED isolation — other connections never see uncommitted changes. The overlay tracks inserts, deletes, and updates as sparse maps, and `Scan`/`LookupByPK` merge the overlay with the real heap to provide read-your-own-writes semantics. On `ROLLBACK`, the overlay is simply discarded. DDL is rejected inside transactions (SQLSTATE "25001").
+
+**Transaction commit protocol.** On `COMMIT`, table locks are acquired in alphabetical order (deterministic ordering prevents deadlocks), constraints are re-validated against the current heap state, and a four-phase WAL write protocol ensures atomicity across multiple tables:
+
+1. **Phase 1 — Write DML:** For each touched table, write `opBeginTx` + DML entries to the table's WAL (no fsync).
+2. **Phase 2 — Sync table WALs:** Fsync each table WAL so DML entries are durable.
+3. **Phase 3 — Catalog commit point:** Write an `opTxCommit` record to `catalog.wal` listing all touched tables (single fsync). This is the atomic commit point — if this record exists on recovery, the transaction is considered committed.
+4. **Phase 4 — Per-table commit markers:** Write `opCommitTx` to each table WAL. These are convenience markers for the common (no-crash) replay path.
+
+**Crash recovery.** During replay, the catalog WAL's `opTxCommit` records identify which tables have committed transactions. If a per-table WAL has an incomplete transaction group (`opBeginTx` without `opCommitTx`) but the catalog confirms the table was committed, the entries are applied. Without catalog confirmation, incomplete groups are silently discarded. This handles the crash-between-tables scenario: even if Phase 4 only completed for some tables, the catalog commit in Phase 3 ensures all-or-nothing recovery.
 
 ## Error Handling
 
@@ -402,7 +411,7 @@ The CREATE TABLE entry (WAL v3) includes a uint16 ordinal per column. Migration 
 
 ## What We Don't Have (and Why)
 
-- **Transactions:** Each statement is atomic on its own. Multi-statement transactions would require undo logs, savepoints, and isolation levels — significant complexity for a project focused on simplicity.
+- **Savepoints:** `SAVEPOINT` / `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT` are not supported. Transactions are all-or-nothing.
 - **Extended query protocol:** Prepared statements and parameter binding would double the wire protocol code. The simple query flow covers all interactive use cases.
 - **Disk-based storage:** All data lives in memory (reconstructed from WAL on startup). A disk-based B-tree or LSM tree would be the natural next step for datasets larger than RAM.
 - **Query optimizer:** There is no cost-based optimizer. The only optimizations are PK index lookups and explicit `INDEXED BY` secondary index lookups (both supported for regular and aggregate queries). Everything else is a sequential scan with filter. This is fine for small tables and keeps execution predictable.

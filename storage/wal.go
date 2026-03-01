@@ -29,6 +29,9 @@ const (
 	opCreateIndex byte = 8
 	opDropIndex   byte = 9
 	opInsertBatch byte = 10
+	opBeginTx     byte = 11
+	opCommitTx    byte = 12
+	opTxCommit    byte = 13 // catalog-level: atomic commit record for multi-table transactions
 )
 
 // WALMigrationNeededError is returned when a WAL file requires migration
@@ -292,6 +295,82 @@ func (w *WAL) WriteDelete(table string, rowIDs []int64) error {
 	return w.writeEntry(opDelete, buf)
 }
 
+// WriteBeginTx logs a transaction begin marker. No fsync — the commit
+// marker will fsync the whole group.
+func (w *WAL) WriteBeginTx() error {
+	return w.writeEntryNoSync(opBeginTx, nil)
+}
+
+// WriteCommitTx logs a transaction commit marker and fsyncs.
+func (w *WAL) WriteCommitTx() error {
+	return w.writeEntry(opCommitTx, nil)
+}
+
+// WriteTxCommit writes a multi-table transaction commit record to the
+// catalog WAL. This is the single atomic commit point for multi-table
+// transactions. The record lists all table names whose per-table WAL
+// groups should be considered committed.
+// Format: [count:u16] per table: [name:str]
+func (w *WAL) WriteTxCommit(tables []string) error {
+	buf := make([]byte, 0, 64)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(len(tables)))
+	for _, t := range tables {
+		buf = encodeString(buf, t)
+	}
+	return w.writeEntry(opTxCommit, buf)
+}
+
+// writeEntryNoSync appends a WAL entry without fsyncing.
+func (w *WAL) writeEntryNoSync(op byte, payload []byte) error {
+	totalLen := uint32(4 + 1 + len(payload) + 4)
+
+	entry := make([]byte, 0, totalLen)
+	entry = binary.BigEndian.AppendUint32(entry, totalLen)
+	entry = append(entry, op)
+	entry = append(entry, payload...)
+	entry = binary.BigEndian.AppendUint32(entry, crc32.ChecksumIEEE(entry[4:]))
+
+	_, err := w.file.Write(entry)
+	return err
+}
+
+// WriteInsertBatchNoSync logs a batch INSERT without fsyncing (used inside transactions).
+func (w *WAL) WriteInsertBatchNoSync(table string, inserts []rowInsert) error {
+	buf := encodeString(nil, table)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(len(inserts)))
+	for _, ins := range inserts {
+		buf = binary.BigEndian.AppendUint64(buf, uint64(ins.RowID))
+		buf = encodeValues(buf, ins.Values)
+	}
+	return w.writeEntryNoSync(opInsertBatch, buf)
+}
+
+// WriteDeleteNoSync logs a DELETE without fsyncing (used inside transactions).
+func (w *WAL) WriteDeleteNoSync(table string, rowIDs []int64) error {
+	buf := encodeString(nil, table)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(len(rowIDs)))
+	for _, id := range rowIDs {
+		buf = binary.BigEndian.AppendUint64(buf, uint64(id))
+	}
+	return w.writeEntryNoSync(opDelete, buf)
+}
+
+// WriteUpdateNoSync logs an UPDATE without fsyncing (used inside transactions).
+func (w *WAL) WriteUpdateNoSync(table string, updates []rowUpdate) error {
+	buf := encodeString(nil, table)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(len(updates)))
+	for _, u := range updates {
+		buf = binary.BigEndian.AppendUint64(buf, uint64(u.RowID))
+		buf = encodeValues(buf, u.Values)
+	}
+	return w.writeEntryNoSync(opUpdate, buf)
+}
+
+// Sync fsyncs the WAL file (used after writing all transaction entries).
+func (w *WAL) Sync() error {
+	return w.file.Sync()
+}
+
 // WriteUpdate logs an UPDATE operation.
 func (w *WAL) WriteUpdate(table string, updates []rowUpdate) error {
 	buf := encodeString(nil, table)
@@ -318,20 +397,57 @@ type ReplayHandler interface {
 	OnInsert(table string, rowID int64, values []any) error
 	OnDelete(table string, rowIDs []int64) error
 	OnUpdate(table string, updates []rowUpdate) error
+	OnTxCommit(tables []string) error
+}
+
+// walEntry is a decoded WAL entry buffered during transaction replay.
+type walEntry struct {
+	op      byte
+	payload []byte
 }
 
 // Replay reads the WAL from after the header and calls handler for every
-// valid entry. It returns nil on clean EOF.
+// valid entry. Entries between opBeginTx and opCommitTx are buffered and
+// only applied if the commit marker is found. Incomplete transactions
+// (missing opCommitTx) are silently discarded for crash safety.
 func (w *WAL) Replay(handler ReplayHandler) error {
+	return w.ReplayWithTxRecovery(handler, false)
+}
+
+// ReplayWithTxRecovery is like Replay but accepts a txCommitted flag
+// indicating that the catalog WAL has a TxCommit record for this table.
+// When true, an incomplete transaction group at the end of the WAL
+// (BeginTx without CommitTx) is applied rather than discarded, because
+// the catalog confirms the transaction committed (crash happened after
+// catalog commit but before per-table CommitTx was written).
+func (w *WAL) ReplayWithTxRecovery(handler ReplayHandler, txCommitted bool) error {
 	// Skip past the header to the first entry.
 	if _, err := w.file.Seek(walHeaderSize, io.SeekStart); err != nil {
 		return err
 	}
 
+	var txBuf []walEntry // non-nil when inside a transaction group
+	inTx := false
+
 	for {
 		var totalLen uint32
 		if err := binary.Read(w.file, binary.BigEndian, &totalLen); err != nil {
 			if err == io.EOF {
+				if inTx {
+					if txCommitted {
+						// Catalog says this transaction committed — apply
+						// the buffered entries despite missing CommitTx.
+						log.Printf("WAL replay: applying committed transaction (%d entries, recovered via catalog)", len(txBuf))
+						for _, e := range txBuf {
+							if err := replayEntry(e.op, e.payload, handler); err != nil {
+								return fmt.Errorf("replay recovered tx: %w", err)
+							}
+						}
+					} else {
+						// Incomplete transaction at end of WAL — discard.
+						log.Printf("WAL replay: discarding incomplete transaction (%d entries)", len(txBuf))
+					}
+				}
 				return nil // clean end
 			}
 			return fmt.Errorf("read entry length: %w", err)
@@ -342,17 +458,73 @@ func (w *WAL) Replay(handler ReplayHandler) error {
 
 		rest := make([]byte, totalLen-4)
 		if _, err := io.ReadFull(w.file, rest); err != nil {
+			if inTx {
+				if txCommitted {
+					log.Printf("WAL replay: applying committed transaction (%d entries, truncated entry recovered via catalog)", len(txBuf))
+					for _, e := range txBuf {
+						if rerr := replayEntry(e.op, e.payload, handler); rerr != nil {
+							return fmt.Errorf("replay recovered tx: %w", rerr)
+						}
+					}
+				} else {
+					log.Printf("WAL replay: discarding incomplete transaction (%d entries, truncated entry)", len(txBuf))
+				}
+				return nil
+			}
 			return fmt.Errorf("read entry body: %w", err)
 		}
 
 		data := rest[:len(rest)-4]
 		storedCRC := binary.BigEndian.Uint32(rest[len(rest)-4:])
 		if crc32.ChecksumIEEE(data) != storedCRC {
+			if inTx {
+				if txCommitted {
+					log.Printf("WAL replay: applying committed transaction (%d entries, CRC mismatch recovered via catalog)", len(txBuf))
+					for _, e := range txBuf {
+						if rerr := replayEntry(e.op, e.payload, handler); rerr != nil {
+							return fmt.Errorf("replay recovered tx: %w", rerr)
+						}
+					}
+				} else {
+					log.Printf("WAL replay: discarding incomplete transaction (%d entries, CRC mismatch)", len(txBuf))
+				}
+				return nil
+			}
 			return fmt.Errorf("WAL CRC mismatch")
 		}
 
-		if err := replayEntry(data[0], data[1:], handler); err != nil {
-			return fmt.Errorf("replay: %w", err)
+		op := data[0]
+		payload := data[1:]
+
+		switch op {
+		case opBeginTx:
+			inTx = true
+			txBuf = txBuf[:0]
+			continue
+		case opCommitTx:
+			if !inTx {
+				continue // spurious commit marker, ignore
+			}
+			// Apply all buffered entries.
+			for _, e := range txBuf {
+				if err := replayEntry(e.op, e.payload, handler); err != nil {
+					return fmt.Errorf("replay tx: %w", err)
+				}
+			}
+			inTx = false
+			txBuf = txBuf[:0]
+			continue
+		}
+
+		if inTx {
+			// Buffer the entry — will be applied on commit.
+			p := make([]byte, len(payload))
+			copy(p, payload)
+			txBuf = append(txBuf, walEntry{op: op, payload: p})
+		} else {
+			if err := replayEntry(op, payload, handler); err != nil {
+				return fmt.Errorf("replay: %w", err)
+			}
 		}
 	}
 }
@@ -379,9 +551,28 @@ func replayEntry(op byte, payload []byte, h ReplayHandler) error {
 		return replayCreateIndex(payload, h)
 	case opDropIndex:
 		return replayDropIndex(payload, h)
+	case opTxCommit:
+		return replayTxCommit(payload, h)
 	default:
 		return fmt.Errorf("unknown WAL op %d", op)
 	}
+}
+
+func replayTxCommit(payload []byte, h ReplayHandler) error {
+	if len(payload) < 2 {
+		return fmt.Errorf("truncated tx commit count")
+	}
+	count := binary.BigEndian.Uint16(payload[:2])
+	rest := payload[2:]
+	tables := make([]string, count)
+	var err error
+	for i := range tables {
+		tables[i], rest, err = decodeString(rest)
+		if err != nil {
+			return err
+		}
+	}
+	return h.OnTxCommit(tables)
 }
 
 func replayCreateTable(payload []byte, h ReplayHandler) error {

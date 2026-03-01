@@ -41,7 +41,8 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 
 - **PostgreSQL wire protocol (v3)** — connect with `psql`, `pgx`, `node-postgres`, or any PG driver
 - **Persistent storage** — per-table write-ahead log (WAL) files with CRC32 checksums and fsync for crash recovery; DROP TABLE instantly reclaims disk space
-- **SQL support** — CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK
+- **SQL support** — CREATE TABLE, DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT (with WHERE, ORDER BY, LIMIT, OFFSET, column aliases via AS, and INNER JOIN), UPDATE, DELETE
+- **Transactions** — `BEGIN`, `COMMIT`, `ROLLBACK` with deferred-execution overlay; writes are buffered until COMMIT, providing READ COMMITTED isolation; crash-safe via WAL begin/commit markers; DDL rejected inside transactions
 - **PRIMARY KEY constraints** — single-column primary keys with uniqueness enforcement, backed by B-tree indexes for O(log n) lookups
 - **NOT NULL constraints** — standalone `NOT NULL` on any column; enforced on INSERT and UPDATE; PRIMARY KEY columns are implicitly NOT NULL
 - **Secondary indexes** — `CREATE [UNIQUE] INDEX [name] ON table(column)` and `DROP INDEX name ON table`; optional index names (auto-generated as `idx_{column}`); table-scoped names; explicit `INDEXED BY <name>` syntax for query acceleration (no automatic index selection); NULL values not indexed (multiple NULLs allowed in UNIQUE indexes per SQL standard)
@@ -210,10 +211,10 @@ DELETE FROM <table> WHERE <condition>;
 DELETE FROM <table> INDEXED BY <index> WHERE <col> = <val>;  -- use named index
 DELETE FROM <table>;  -- all rows
 
--- Transaction control (accepted but no-op — every statement auto-commits)
-BEGIN;
-COMMIT;
-ROLLBACK;
+-- Transaction control
+BEGIN;                -- start a transaction (writes are buffered until COMMIT)
+COMMIT;              -- apply all buffered changes atomically
+ROLLBACK;            -- discard all buffered changes
 ```
 
 ### Character Encoding
@@ -1032,7 +1033,7 @@ go test -race ./...
 
 The test suite covers:
 - **Parser**: all 9 statement types, WHERE with AND/OR/NOT/precedence, operators, IS NULL / IS NOT NULL, LIKE / NOT LIKE / ILIKE / NOT ILIKE with ESCAPE, IN / NOT IN, arithmetic expressions (+, -, *, /, %, unary minus) with precedence, aggregate and scalar function syntax, column aliases (AS), ORDER BY, INNER JOIN (with aliases, qualified columns, multi-join), implicit cross-join (comma-separated FROM), optional FROM clause, UTF-8 identifiers and string literals, SQL comments (`--` and `/* */` with nesting), error cases
-- **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables
+- **Storage**: CRUD operations, WAL replay across restart, typed errors, concurrent reads and writes, per-table WAL file layout, split WAL migration, orphan cleanup, concurrent writes to independent tables, transaction overlay (insert/update/delete commit and rollback, read-your-own-writes, multi-table commit, PK conflict on commit, isolation between transactions, WAL crash recovery for incomplete transactions)
 - **Executor**: full round-trip (CREATE → INSERT → SELECT → UPDATE → DELETE), arithmetic expressions (static and with FROM, in WHERE, in INSERT VALUES), division/modulo by zero, NULL propagation, aggregate functions (COUNT/SUM/AVG/MIN/MAX), ORDER BY (ASC/DESC, multi-column, NULLs last), LIMIT/OFFSET, column aliases, static SELECT (literals and scalar functions), IS NULL / IS NOT NULL, NOT operator, NULL comparison semantics, IN / NOT IN (integers, text, booleans, timestamps, NULL semantics, UPDATE/DELETE, JOIN), INNER JOIN (basic, aliases, WHERE filter, empty result, SELECT *, ambiguous column errors, ORDER BY, LIMIT/OFFSET), BEGIN/COMMIT/ROLLBACK no-ops, SQLSTATE codes, column resolution, NULL handling
 
 ## Error Handling
@@ -1058,7 +1059,8 @@ mulldb returns proper PostgreSQL SQLSTATE codes in ErrorResponse messages:
 
 mulldb is intentionally minimal. Things it does **not** support:
 - **Multi-column primary keys** — only single-column PRIMARY KEY is supported
-- **Transactions** — BEGIN/COMMIT/ROLLBACK are accepted but are no-ops; every statement auto-commits and there is no rollback or isolation
+- **SAVEPOINT** — no savepoints within transactions
+- **SET TRANSACTION** — isolation level is always READ COMMITTED; not configurable
 - **LEFT/RIGHT/FULL OUTER JOINs** — only INNER JOIN is supported
 - **GROUP BY / HAVING**
 - **Decimal arithmetic** — no exact-precision DECIMAL/NUMERIC types; use FLOAT for approximate numeric values

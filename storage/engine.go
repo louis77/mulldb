@@ -112,16 +112,23 @@ func Open(dataDir string, migrate bool) (Engine, error) {
 	e.fsync.Store(true)
 	e.catalogWAL.fsync = &e.fsync
 
-	// Phase 1: Replay catalog WAL to learn all table schemas.
-	catHandler := &catalogReplayHandler{catalog: e.catalog}
+	// Phase 1: Replay catalog WAL to learn all table schemas and
+	// collect TxCommit records for crash recovery.
+	catHandler := &catalogReplayHandler{
+		catalog:           e.catalog,
+		txCommittedTables: make(map[string]bool),
+	}
 	if err := catWAL.Replay(catHandler); err != nil {
 		catWAL.Close()
 		return nil, fmt.Errorf("replay catalog WAL: %w", err)
 	}
 
 	// Phase 2: For each surviving table, open its WAL and replay DML.
+	// Pass txCommittedTables so that incomplete transaction groups can
+	// be recovered if the catalog confirms the transaction committed.
 	for name, def := range e.catalog.tables {
-		ts, err := e.openTableState(*def, tablesDir, migrate)
+		txCommitted := catHandler.txCommittedTables[name]
+		ts, err := e.openTableState(*def, tablesDir, migrate, txCommitted)
 		if err != nil {
 			e.closeAll()
 			return nil, fmt.Errorf("open table %q: %w", name, err)
@@ -140,7 +147,11 @@ func Open(dataDir string, migrate bool) (Engine, error) {
 }
 
 // openTableState opens a table's WAL file and replays it to build the heap.
-func (e *engine) openTableState(def TableDef, tablesDir string, migrate bool) (*tableState, error) {
+// txCommitted indicates that the catalog WAL has a TxCommit record for this
+// table, meaning an incomplete transaction group should be applied rather
+// than discarded (crash happened after catalog commit but before per-table
+// CommitTx was written).
+func (e *engine) openTableState(def TableDef, tablesDir string, migrate bool, txCommitted bool) (*tableState, error) {
 	walPath := filepath.Join(tablesDir, tableFileName(def.Name))
 	w, err := OpenWAL(walPath, migrate)
 	if err != nil {
@@ -149,7 +160,7 @@ func (e *engine) openTableState(def TableDef, tablesDir string, migrate bool) (*
 
 	heap := newTableHeap(def)
 	handler := &dmlReplayHandler{tableName: def.Name, heap: heap}
-	if err := w.Replay(handler); err != nil {
+	if err := w.ReplayWithTxRecovery(handler, txCommitted); err != nil {
 		w.Close()
 		return nil, fmt.Errorf("replay: %w", err)
 	}
@@ -235,9 +246,15 @@ func (e *engine) getTableState(name string) (*tableState, error) {
 // Replay handlers — used during WAL replay to rebuild in-memory state
 // -------------------------------------------------------------------------
 
-// catalogReplayHandler accepts only DDL entries (CreateTable / DropTable).
+// catalogReplayHandler accepts only DDL entries (CreateTable / DropTable)
+// and TxCommit records. TxCommit records are collected so that per-table
+// WAL replay can recover incomplete transaction groups.
 type catalogReplayHandler struct {
 	catalog *catalog
+	// txCommittedTables is the set of tables that have a TxCommit record
+	// in the catalog WAL. Used during per-table WAL replay to recover
+	// committed transactions that crashed before writing CommitTx.
+	txCommittedTables map[string]bool
 }
 
 func (h *catalogReplayHandler) OnCreateTable(name string, columns []ColumnDef) error {
@@ -274,6 +291,13 @@ func (h *catalogReplayHandler) OnDelete(string, []int64) error {
 
 func (h *catalogReplayHandler) OnUpdate(string, []rowUpdate) error {
 	return fmt.Errorf("unexpected UPDATE in catalog WAL")
+}
+
+func (h *catalogReplayHandler) OnTxCommit(tables []string) error {
+	for _, t := range tables {
+		h.txCommittedTables[t] = true
+	}
+	return nil
 }
 
 // dmlReplayHandler accepts only DML entries (Insert/Delete/Update) and
@@ -332,6 +356,10 @@ func (h *dmlReplayHandler) OnUpdate(table string, updates []rowUpdate) error {
 		}
 	}
 	return nil
+}
+
+func (h *dmlReplayHandler) OnTxCommit([]string) error {
+	return fmt.Errorf("unexpected TX COMMIT in table WAL for %q", h.tableName)
 }
 
 // -------------------------------------------------------------------------

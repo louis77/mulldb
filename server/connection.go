@@ -12,6 +12,16 @@ import (
 	"mulldb/config"
 	"mulldb/executor"
 	"mulldb/pgwire"
+	"mulldb/storage"
+)
+
+// txStatus tracks the transaction state for a connection.
+type txStatus int
+
+const (
+	txStatusIdle   txStatus = iota // not in a transaction
+	txStatusActive                 // inside a transaction (BEGIN issued)
+	txStatusFailed                 // error occurred inside a transaction
 )
 
 // Connection handles the lifecycle of a single client connection:
@@ -21,18 +31,22 @@ type Connection struct {
 	reader       *pgwire.Reader
 	writer       *pgwire.Writer
 	cfg          *config.Config
-	exec         *executor.Executor
+	exec         *executor.Executor // current executor (base or tx-scoped)
+	baseExec     *executor.Executor // original executor backed by real engine
 	traceEnabled bool
 	lastTrace    *executor.Trace
+	txState      txStatus
+	txEngine     *storage.TxEngine
 }
 
 func newConnection(conn net.Conn, cfg *config.Config, exec *executor.Executor) *Connection {
 	return &Connection{
-		conn:   conn,
-		reader: pgwire.NewReader(conn),
-		writer: pgwire.NewWriter(conn),
-		cfg:    cfg,
-		exec:   exec,
+		conn:     conn,
+		reader:   pgwire.NewReader(conn),
+		writer:   pgwire.NewWriter(conn),
+		cfg:      cfg,
+		exec:     exec,
+		baseExec: exec,
 	}
 }
 
@@ -165,6 +179,28 @@ func (c *Connection) handleQuery(query string) error {
 
 	upper := strings.ToUpper(query)
 
+	// Handle transaction control statements before anything else.
+	switch {
+	case upper == "BEGIN" || upper == "BEGIN TRANSACTION" || upper == "START TRANSACTION":
+		return c.handleBegin(query)
+	case upper == "COMMIT" || upper == "END" || upper == "END TRANSACTION":
+		return c.handleCommit(query)
+	case upper == "ROLLBACK" || upper == "ABORT":
+		return c.handleRollback(query)
+	}
+
+	// In failed-transaction state, reject everything except ROLLBACK.
+	if c.txState == txStatusFailed {
+		if werr := c.writer.WriteErrorResponse("ERROR", "25P02",
+			"current transaction is aborted, commands ignored until end of transaction block"); werr != nil {
+			return werr
+		}
+		if c.cfg.LogLevel >= 1 {
+			log.Printf("[SQL] ERROR  %s — transaction aborted", query)
+		}
+		return c.sendReady()
+	}
+
 	// Handle SET commands that psql sends during startup — our parser
 	// doesn't cover SET, so we return a stub response.
 	if strings.HasPrefix(upper, "SET") {
@@ -216,11 +252,22 @@ func (c *Connection) handleQuery(query string) error {
 		if errors.As(err, &qe) {
 			code = qe.Code
 		}
+
+		// Check for DDL-in-transaction error.
+		var activeTxErr *storage.ActiveTxError
+		if errors.As(err, &activeTxErr) {
+			code = "25001"
+		}
+
 		if werr := c.writer.WriteErrorResponse("ERROR", code, err.Error()); werr != nil {
 			return werr
 		}
 		if c.cfg.LogLevel >= 1 {
 			log.Printf("[SQL] ERROR  %s — %s", query, err.Error())
+		}
+		// If in a transaction, transition to failed state on any error.
+		if c.txState == txStatusActive {
+			c.txState = txStatusFailed
 		}
 		return c.sendReady()
 	}
@@ -255,9 +302,110 @@ func (c *Connection) handleQuery(query string) error {
 	return c.sendReady()
 }
 
-// sendReady sends ReadyForQuery and flushes the write buffer.
+// handleBegin starts a new transaction.
+func (c *Connection) handleBegin(query string) error {
+	if c.txState == txStatusActive || c.txState == txStatusFailed {
+		// PostgreSQL sends a WARNING but stays in the same transaction.
+		// We'll just send the CommandComplete and stay in the current tx.
+		if werr := c.writer.WriteErrorResponse("WARNING", "25001",
+			"there is already a transaction in progress"); werr != nil {
+			return werr
+		}
+	} else {
+		// Start a new transaction.
+		c.txEngine = storage.NewTxEngine(c.baseExec.Engine())
+		c.exec = c.baseExec.WithEngine(c.txEngine)
+		c.txState = txStatusActive
+	}
+
+	if err := c.writer.WriteCommandComplete("BEGIN"); err != nil {
+		return err
+	}
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] OK     %s — BEGIN", query)
+	}
+	return c.sendReady()
+}
+
+// handleCommit commits the current transaction.
+func (c *Connection) handleCommit(query string) error {
+	if c.txState == txStatusFailed {
+		// Transaction was aborted — COMMIT acts as ROLLBACK.
+		c.rollbackTx()
+		if err := c.writer.WriteCommandComplete("ROLLBACK"); err != nil {
+			return err
+		}
+		if c.cfg.LogLevel >= 1 {
+			log.Printf("[SQL] OK     %s — ROLLBACK (aborted tx)", query)
+		}
+		return c.sendReady()
+	}
+
+	if c.txState == txStatusActive {
+		// Commit the overlay to the real engine.
+		if err := c.txEngine.CommitOverlay(); err != nil {
+			code := "40001" // serialization_failure
+			var qe *executor.QueryError
+			if errors.As(err, &qe) {
+				code = qe.Code
+			}
+			errCode := sqlstateForStorageError(err)
+			if errCode != "" {
+				code = errCode
+			}
+			c.rollbackTx()
+			if werr := c.writer.WriteErrorResponse("ERROR", code, err.Error()); werr != nil {
+				return werr
+			}
+			if c.cfg.LogLevel >= 1 {
+				log.Printf("[SQL] ERROR  %s — %s", query, err.Error())
+			}
+			return c.sendReady()
+		}
+		c.rollbackTx() // Clean up tx state (exec is reset, but changes are committed)
+	}
+
+	if err := c.writer.WriteCommandComplete("COMMIT"); err != nil {
+		return err
+	}
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] OK     %s — COMMIT", query)
+	}
+	return c.sendReady()
+}
+
+// handleRollback rolls back the current transaction.
+func (c *Connection) handleRollback(query string) error {
+	c.rollbackTx()
+	if err := c.writer.WriteCommandComplete("ROLLBACK"); err != nil {
+		return err
+	}
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] OK     %s — ROLLBACK", query)
+	}
+	return c.sendReady()
+}
+
+// rollbackTx discards the transaction overlay and restores the base executor.
+func (c *Connection) rollbackTx() {
+	c.txState = txStatusIdle
+	c.txEngine = nil
+	c.exec = c.baseExec
+}
+
+// sendReady sends ReadyForQuery with the appropriate transaction status
+// indicator and flushes the write buffer.
 func (c *Connection) sendReady() error {
-	if err := c.writer.WriteReadyForQuery(pgwire.TxIdle); err != nil {
+	var status byte
+	switch c.txState {
+	case txStatusIdle:
+		status = pgwire.TxIdle
+	case txStatusActive:
+		status = pgwire.TxInTx
+	case txStatusFailed:
+		status = pgwire.TxFailed
+	}
+	if err := c.writer.WriteReadyForQuery(status); err != nil {
 		return err
 	}
 	return c.writer.Flush()
@@ -333,6 +481,19 @@ func (c *Connection) sendResult(result *executor.Result, query string) error {
 		log.Printf("[SQL] OK     %s — %s", query, result.Tag)
 	}
 	return c.sendReady()
+}
+
+// sqlstateForStorageError maps storage-layer errors to SQLSTATE codes.
+func sqlstateForStorageError(err error) string {
+	var uv *storage.UniqueViolationError
+	if errors.As(err, &uv) {
+		return "23505"
+	}
+	var tnf *storage.TableNotFoundError
+	if errors.As(err, &tnf) {
+		return "42P01"
+	}
+	return ""
 }
 
 // stripNull removes a trailing null byte from the payload, which is how
