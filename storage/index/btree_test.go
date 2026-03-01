@@ -223,6 +223,47 @@ func TestBTree_LargeDelete(t *testing.T) {
 	}
 }
 
+func TestBTree_LargeDeleteAll(t *testing.T) {
+	bt := NewBTree(cmp)
+	const n = 100_000
+	for i := int64(0); i < n; i++ {
+		bt.Put(i, i)
+	}
+	// Delete every entry. Before the fix, this panicked with
+	// "index out of range [-1]" in largest() due to empty leaf nodes.
+	for i := int64(0); i < n; i++ {
+		if !bt.Delete(i) {
+			t.Fatalf("delete %d should return true", i)
+		}
+	}
+	// Tree should be empty.
+	for i := int64(0); i < n; i++ {
+		if _, ok := bt.Get(i); ok {
+			t.Fatalf("get %d should return false after delete-all", i)
+		}
+	}
+}
+
+func TestMultiBTree_LargeDeleteAll(t *testing.T) {
+	mt := NewMultiBTree(cmp)
+	const n = 100_000
+	for i := int64(0); i < n; i++ {
+		mt.Put(int64(i%1000), i)
+	}
+	// Delete every entry.
+	for i := int64(0); i < n; i++ {
+		if !mt.Delete(int64(i%1000), i) {
+			t.Fatalf("delete (%d, %d) should return true", i%1000, i)
+		}
+	}
+	// All keys should return empty.
+	for k := int64(0); k < 1000; k++ {
+		if ids := mt.GetAll(k); len(ids) != 0 {
+			t.Fatalf("GetAll(%d) after delete-all returned %d, want 0", k, len(ids))
+		}
+	}
+}
+
 func TestBTree_Size(t *testing.T) {
 	bt := NewBTree(cmp)
 	emptySize := bt.Size()

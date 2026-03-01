@@ -174,8 +174,8 @@ func (b *BTree) split(n *btreeNode) (btreeEntry, *btreeNode) {
 }
 
 // delete removes key from the subtree rooted at n. Returns true if found.
-// Uses a simplified approach: after deletion, nodes may temporarily underflow.
-// For an in-memory index this is acceptable since we optimize for simplicity.
+// After each recursive deletion, fixChildUnderflow merges any child that
+// became empty (0 entries) into an adjacent sibling.
 func (b *BTree) delete(n *btreeNode, key any) bool {
 	idx, found := b.search(n, key)
 
@@ -192,11 +192,45 @@ func (b *BTree) delete(n *btreeNode, key any) bool {
 		// Replace with in-order predecessor (largest key in left subtree).
 		pred := b.largest(n.children[idx])
 		n.entries[idx] = pred
-		return b.delete(n.children[idx], pred.key)
+		deleted := b.delete(n.children[idx], pred.key)
+		b.fixChildUnderflow(n, idx)
+		return deleted
 	}
 
 	// Recurse into child.
-	return b.delete(n.children[idx], key)
+	deleted := b.delete(n.children[idx], key)
+	b.fixChildUnderflow(n, idx)
+	return deleted
+}
+
+// fixChildUnderflow handles a child that has become empty (0 entries) after
+// a deletion. It pushes a separator entry from the parent into an adjacent
+// sibling and removes the empty child, maintaining B-tree structural invariants.
+func (b *BTree) fixChildUnderflow(n *btreeNode, childIdx int) {
+	child := n.children[childIdx]
+	if len(child.entries) > 0 {
+		return
+	}
+
+	if childIdx > 0 {
+		// Merge into left sibling: push separator down, attach child's subtree.
+		left := n.children[childIdx-1]
+		left.entries = append(left.entries, n.entries[childIdx-1])
+		if !child.isLeaf() {
+			left.children = append(left.children, child.children...)
+		}
+		n.entries = append(n.entries[:childIdx-1], n.entries[childIdx:]...)
+		n.children = append(n.children[:childIdx], n.children[childIdx+1:]...)
+	} else if len(n.children) > 1 {
+		// Merge into right sibling: push separator down, attach child's subtree.
+		right := n.children[1]
+		right.entries = append([]btreeEntry{n.entries[0]}, right.entries...)
+		if !child.isLeaf() {
+			right.children = append(child.children, right.children...)
+		}
+		n.entries = n.entries[1:]
+		n.children = n.children[1:]
+	}
 }
 
 // largest returns the rightmost entry in the subtree rooted at n.
