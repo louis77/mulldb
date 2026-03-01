@@ -753,16 +753,19 @@ func (e *engine) Insert(table string, columns []string, values [][]any) (int64, 
 		}
 	}
 
-	var count int64
-	for _, fullRow := range resolvedRows {
-		id := heap.allocateID()
-		if err := ts.wal.WriteInsert(table, id, fullRow); err != nil {
-			return count, fmt.Errorf("WAL: %w", err)
-		}
-		heap.insertWithID(id, fullRow)
-		count++
+	// Allocate all row IDs, write a single batched WAL entry (one fsync),
+	// then apply to the heap. If the WAL write fails, zero rows are applied.
+	inserts := make([]rowInsert, len(resolvedRows))
+	for i, fullRow := range resolvedRows {
+		inserts[i] = rowInsert{RowID: heap.allocateID(), Values: fullRow}
 	}
-	return count, nil
+	if err := ts.wal.WriteInsertBatch(table, inserts); err != nil {
+		return 0, fmt.Errorf("WAL: %w", err)
+	}
+	for _, ins := range inserts {
+		heap.insertWithID(ins.RowID, ins.Values)
+	}
+	return int64(len(inserts)), nil
 }
 
 func (e *engine) Scan(table string) (RowIterator, error) {

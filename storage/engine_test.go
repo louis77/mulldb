@@ -774,12 +774,14 @@ func TestEngine_SplitWAL_Migration(t *testing.T) {
 		{Name: "name", DataType: TypeText},
 	}
 	w.WriteCreateTable("users", cols)
-	w.WriteInsert("users", 1, []any{int64(1), "alice"})
-	w.WriteInsert("users", 2, []any{int64(2), "bob"})
+	w.WriteInsertBatch("users", []rowInsert{
+		{RowID: 1, Values: []any{int64(1), "alice"}},
+		{RowID: 2, Values: []any{int64(2), "bob"}},
+	})
 
 	// Also create+drop a table to test that dropped tables are pruned.
 	w.WriteCreateTable("temp", []ColumnDef{{Name: "x", DataType: TypeInteger}})
-	w.WriteInsert("temp", 1, []any{int64(42)})
+	w.WriteInsertBatch("temp", []rowInsert{{RowID: 1, Values: []any{int64(42)}}})
 	w.WriteDropTable("temp")
 	w.Close()
 

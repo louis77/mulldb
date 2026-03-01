@@ -28,6 +28,7 @@ const (
 	opDropColumn  byte = 7
 	opCreateIndex byte = 8
 	opDropIndex   byte = 9
+	opInsertBatch byte = 10
 )
 
 // WALMigrationNeededError is returned when a WAL file requires migration
@@ -42,6 +43,12 @@ func (e *WALMigrationNeededError) Error() string {
 		"WAL file is format version %d but version %d is required; restart with --migrate flag",
 		e.CurrentVersion, e.RequiredVersion,
 	)
+}
+
+// rowInsert pairs a row ID with its values for WAL batch insert entries.
+type rowInsert struct {
+	RowID  int64
+	Values []any
 }
 
 // rowUpdate pairs a row ID with its new values for WAL update entries.
@@ -262,12 +269,17 @@ func (w *WAL) WriteDropIndex(table string, indexName string) error {
 	return w.writeEntry(opDropIndex, buf)
 }
 
-// WriteInsert logs an INSERT operation for a single row.
-func (w *WAL) WriteInsert(table string, rowID int64, values []any) error {
+// WriteInsertBatch logs a batch INSERT operation for multiple rows in a
+// single WAL entry with a single fsync.
+// Format: [table:str][count:u16] per row: [rowID:u64][values...]
+func (w *WAL) WriteInsertBatch(table string, inserts []rowInsert) error {
 	buf := encodeString(nil, table)
-	buf = binary.BigEndian.AppendUint64(buf, uint64(rowID))
-	buf = encodeValues(buf, values)
-	return w.writeEntry(opInsert, buf)
+	buf = binary.BigEndian.AppendUint16(buf, uint16(len(inserts)))
+	for _, ins := range inserts {
+		buf = binary.BigEndian.AppendUint64(buf, uint64(ins.RowID))
+		buf = encodeValues(buf, ins.Values)
+	}
+	return w.writeEntry(opInsertBatch, buf)
 }
 
 // WriteDelete logs a DELETE operation.
@@ -357,6 +369,8 @@ func replayEntry(op byte, payload []byte, h ReplayHandler) error {
 		return replayDropColumn(payload, h)
 	case opInsert:
 		return replayInsert(payload, h)
+	case opInsertBatch:
+		return replayInsertBatch(payload, h)
 	case opDelete:
 		return replayDelete(payload, h)
 	case opUpdate:
@@ -454,6 +468,34 @@ func replayInsert(payload []byte, h ReplayHandler) error {
 		return err
 	}
 	return h.OnInsert(table, rowID, values)
+}
+
+func replayInsertBatch(payload []byte, h ReplayHandler) error {
+	table, rest, err := decodeString(payload)
+	if err != nil {
+		return err
+	}
+	if len(rest) < 2 {
+		return fmt.Errorf("truncated insert batch count")
+	}
+	count := binary.BigEndian.Uint16(rest[:2])
+	rest = rest[2:]
+	for i := 0; i < int(count); i++ {
+		if len(rest) < 8 {
+			return fmt.Errorf("truncated insert batch row ID")
+		}
+		rowID := int64(binary.BigEndian.Uint64(rest[:8]))
+		rest = rest[8:]
+		var values []any
+		values, rest, err = decodeValues(rest)
+		if err != nil {
+			return err
+		}
+		if err := h.OnInsert(table, rowID, values); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func replayDelete(payload []byte, h ReplayHandler) error {

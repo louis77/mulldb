@@ -325,7 +325,7 @@ All features described in the README have been **verified as implemented**:
 | **Identifiers** | Double-quoted identifiers (preserve case, reserved words), UTF-8 throughout |
 | **Comments** | Single-line (`--`) and nested block (`/* */`) |
 | **Catalog Tables** | pg_type, pg_database, pg_namespace, information_schema.tables, information_schema.columns, information_schema.table_constraints, information_schema.key_column_usage |
-| **Storage** | Split WAL (catalog.wal + per-table WALs), CRC32 checksums, fsync, WAL replay, WAL migration (v1→v2→v3→v4, single→split) |
+| **Storage** | Split WAL (catalog.wal + per-table WALs), CRC32 checksums, fsync, WAL replay, WAL migration (v1→v2→v3→v4, single→split), batched WAL writes (single entry + single fsync for multi-row INSERT/UPDATE/DELETE) |
 | **Concurrency** | Per-table locking (RW mutex), concurrent writes to independent tables, multiple readers |
 | **Observability** | Statement tracing (SET trace = on/off, SHOW TRACE), SQLSTATE error codes |
 

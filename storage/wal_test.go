@@ -353,7 +353,7 @@ func TestWAL_CurrentVersionNoMigration(t *testing.T) {
 		{Name: "val", DataType: TypeText},
 	}
 	w.WriteCreateTable("test", cols)
-	w.WriteInsert("test", 1, []any{int64(1), "hello"})
+	w.WriteInsertBatch("test", []rowInsert{{RowID: 1, Values: []any{int64(1), "hello"}}})
 	w.Close()
 
 	// Reopen — should NOT trigger migration.
@@ -504,3 +504,137 @@ func (h *testReplayHandler) OnUpdate(table string, updates []rowUpdate) error {
 
 func (h *testReplayHandler) OnCreateIndex(string, IndexDef) error { return nil }
 func (h *testReplayHandler) OnDropIndex(string, string) error     { return nil }
+
+func TestWAL_InsertBatchRoundTrip(t *testing.T) {
+	dir := tempDir(t)
+	walPath := filepath.Join(dir, "wal.dat")
+	os.MkdirAll(dir, 0755)
+
+	w, err := OpenWAL(walPath, false)
+	if err != nil {
+		t.Fatalf("OpenWAL: %v", err)
+	}
+
+	cols := []ColumnDef{
+		{Name: "id", DataType: TypeInteger, PrimaryKey: true},
+		{Name: "name", DataType: TypeText},
+	}
+	w.WriteCreateTable("users", cols)
+	w.WriteInsertBatch("users", []rowInsert{
+		{RowID: 1, Values: []any{int64(10), "alice"}},
+		{RowID: 2, Values: []any{int64(20), "bob"}},
+		{RowID: 3, Values: []any{int64(30), "carol"}},
+	})
+	w.Close()
+
+	// Reopen and replay.
+	w2, err := OpenWAL(walPath, false)
+	if err != nil {
+		t.Fatalf("OpenWAL reopen: %v", err)
+	}
+
+	h := &testReplayHandler{}
+	if err := w2.Replay(h); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	w2.Close()
+
+	if len(h.creates) != 1 {
+		t.Fatalf("creates = %d, want 1", len(h.creates))
+	}
+	// InsertBatch replays as individual OnInsert calls.
+	if len(h.inserts) != 3 {
+		t.Fatalf("inserts = %d, want 3", len(h.inserts))
+	}
+	for i, want := range []struct {
+		rowID int64
+		id    int64
+		name  string
+	}{
+		{1, 10, "alice"},
+		{2, 20, "bob"},
+		{3, 30, "carol"},
+	} {
+		ins := h.inserts[i]
+		if ins.table != "users" {
+			t.Errorf("insert[%d].table = %q, want users", i, ins.table)
+		}
+		if ins.rowID != want.rowID {
+			t.Errorf("insert[%d].rowID = %d, want %d", i, ins.rowID, want.rowID)
+		}
+		if ins.vals[0] != want.id {
+			t.Errorf("insert[%d].vals[0] = %v, want %d", i, ins.vals[0], want.id)
+		}
+		if ins.vals[1] != want.name {
+			t.Errorf("insert[%d].vals[1] = %v, want %q", i, ins.vals[1], want.name)
+		}
+	}
+}
+
+func TestWAL_LegacyInsertReplay(t *testing.T) {
+	dir := tempDir(t)
+	walPath := filepath.Join(dir, "wal.dat")
+	os.MkdirAll(dir, 0755)
+
+	// Create a current-version WAL but manually write a legacy opInsert entry.
+	f, err := os.Create(walPath)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	writeWALHeader(f)
+
+	// Write a CREATE TABLE entry using the current format.
+	cols := []ColumnDef{
+		{Name: "id", DataType: TypeInteger},
+		{Name: "name", DataType: TypeText},
+	}
+	buf := encodeString(nil, "t")
+	buf = binary.BigEndian.AppendUint16(buf, uint16(len(cols)))
+	for _, col := range cols {
+		buf = encodeString(buf, col.Name)
+		buf = append(buf, byte(col.DataType))
+		buf = append(buf, 0) // pk
+		buf = append(buf, 0) // notNull
+		buf = binary.BigEndian.AppendUint16(buf, uint16(col.Ordinal))
+	}
+	writeRawEntry(f, opCreateTable, buf)
+
+	// Write a legacy opInsert=3 entry (single row format).
+	ibuf := encodeString(nil, "t")
+	ibuf = binary.BigEndian.AppendUint64(ibuf, 1)
+	ibuf = encodeValues(ibuf, []any{int64(42), "hello"})
+	writeRawEntry(f, opInsert, ibuf)
+
+	// Also write a new opInsertBatch=10 entry.
+	bbuf := encodeString(nil, "t")
+	bbuf = binary.BigEndian.AppendUint16(bbuf, 1) // count=1
+	bbuf = binary.BigEndian.AppendUint64(bbuf, 2)
+	bbuf = encodeValues(bbuf, []any{int64(99), "world"})
+	writeRawEntry(f, opInsertBatch, bbuf)
+
+	f.Close()
+
+	// Replay and verify both entries are decoded.
+	w, err := OpenWAL(walPath, false)
+	if err != nil {
+		t.Fatalf("OpenWAL: %v", err)
+	}
+
+	h := &testReplayHandler{}
+	if err := w.Replay(h); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	w.Close()
+
+	if len(h.inserts) != 2 {
+		t.Fatalf("inserts = %d, want 2", len(h.inserts))
+	}
+	// Legacy opInsert entry.
+	if h.inserts[0].rowID != 1 || h.inserts[0].vals[0] != int64(42) {
+		t.Errorf("legacy insert: rowID=%d vals=%v", h.inserts[0].rowID, h.inserts[0].vals)
+	}
+	// New opInsertBatch entry.
+	if h.inserts[1].rowID != 2 || h.inserts[1].vals[0] != int64(99) {
+		t.Errorf("batch insert: rowID=%d vals=%v", h.inserts[1].rowID, h.inserts[1].vals)
+	}
+}

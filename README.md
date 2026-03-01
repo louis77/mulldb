@@ -866,7 +866,7 @@ Lock ordering is always catalog before table (never reversed), which prevents de
 
 **DROP TABLE race guard.** A DML goroutine could grab a `tableState` pointer, release the catalog lock, then find the table was dropped before it acquires the table lock. Each `tableState` has a `dropped` flag that DML checks after acquiring the table lock, returning `TableNotFoundError` if set.
 
-**Atomic batch writes.** Multi-row `INSERT` and `UPDATE` validate all constraints (PK uniqueness, column count) before writing anything. If validation passes, WAL entries are written and in-memory state is updated within a single lock acquisition — no partial writes on constraint violation.
+**Atomic batch writes.** Multi-row `INSERT`, `UPDATE`, and `DELETE` validate all constraints (PK uniqueness, column count) before writing anything. If validation passes, all affected rows are written as a single WAL entry with one fsync, then applied to the in-memory heap — no partial writes on constraint violation or WAL failure.
 
 ### Persistence
 

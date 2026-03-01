@@ -471,7 +471,7 @@ func migrateToSplitWAL(dataDir string) error {
 			// ALTER TABLE ops are DDL — go to catalog WAL.
 			ddlEntries = append(ddlEntries, e)
 
-		case opInsert, opDelete, opUpdate:
+		case opInsert, opInsertBatch, opDelete, opUpdate:
 			name, _, err := decodeString(e.Payload)
 			if err != nil {
 				return fmt.Errorf("decode DML table name: %w", err)

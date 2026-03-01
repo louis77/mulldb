@@ -189,13 +189,15 @@ This split provides three benefits: DROP TABLE instantly reclaims disk space (de
 [uint32 totalLen][byte op][payload bytes][uint32 crc32]
 ```
 
-The length prefix allows reading entry boundaries without parsing. The CRC-32 checksum (IEEE polynomial over op + payload) catches disk corruption. The operation byte identifies the type: CreateTable, DropTable, Insert, Delete, or Update.
+The length prefix allows reading entry boundaries without parsing. The CRC-32 checksum (IEEE polynomial over op + payload) catches disk corruption. The operation byte identifies the type: CreateTable, DropTable, Insert, InsertBatch, Delete, or Update.
 
 **Values are encoded** with a tag-length-value scheme: a one-byte type tag followed by the value in a fixed format. The type tags are: null (0), integer (1), text (2), boolean (3), timestamp (4), float (5). Integers are 8 bytes big-endian; text is a uint16 length prefix followed by UTF-8 bytes; booleans are a single byte; timestamps are 8 bytes big-endian (microseconds since Unix epoch); floats are 8 bytes big-endian (`math.Float64bits` encoding). Big-endian encoding ensures portability across architectures.
 
 **Fsync on every write.** After writing each WAL entry, we call `file.Sync()`. This is conservative — it forces the OS to flush to disk before the engine applies the change to memory. If the process crashes between the WAL write and the heap update, the next startup replays the WAL entry and reaches the same state. If the process crashes during the WAL write, the partial entry is detected by CRC failure or truncation, and replay stops at the last valid entry.
 
-This fsync-per-write strategy is slow for high-throughput workloads (group commits would batch multiple operations into one fsync). But for light workloads, correctness is more valuable than throughput.
+**Batch operations.** Multi-row INSERTs, UPDATEs, and DELETEs are written as a single WAL entry with one fsync. InsertBatch (opcode 10) consolidates multiple inserts with format: `[table:str][count:u16]` then per row: `[rowID:u64][values...]`. The legacy single-row Insert (opcode 3) is still supported during WAL replay for backward compatibility with existing WAL files. Update (opcode 5) and Delete (opcode 4) have always been batched. Row IDs are allocated upfront, the single WAL entry is written and fsynced, and only then are changes applied to the in-memory heap — if the WAL write fails, zero rows are applied.
+
+This fsync-per-entry strategy is slow for high-throughput workloads (group commits would batch multiple operations into one fsync). But for light workloads, correctness is more valuable than throughput.
 
 ### WAL Migration
 
