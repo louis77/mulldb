@@ -265,6 +265,12 @@ type CastExpr struct {
 	TypeName string // uppercased: "INTEGER", "TEXT", "BOOLEAN", "FLOAT", "TIMESTAMP"
 }
 
+// NestExpr represents NEST(SELECT ...) — a correlated subquery that collects rows.
+type NestExpr struct {
+	Query  *SelectStmt
+	Format string // "", "JSON", or "JSONA"
+}
+
 func (*ColumnRef) exprNode()         {}
 func (*StarExpr) exprNode()          {}
 func (*IntegerLit) exprNode()        {}
@@ -281,3 +287,4 @@ func (*NotExpr) exprNode()           {}
 func (*LikeExpr) exprNode()          {}
 func (*InExpr) exprNode()            {}
 func (*CastExpr) exprNode()          {}
+func (*NestExpr) exprNode()          {}

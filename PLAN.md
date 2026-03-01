@@ -269,39 +269,47 @@ The common workaround is JSON aggregation (`json_agg`, `json_build_object` in
 PostgreSQL), but this serializes structured data into a text format only to have the
 client parse it back into objects. This is unnecessary overhead at both ends.
 
-mulldb will support returning nested data natively from JOINs.
+mulldb supports returning nested data via `NEST(SELECT ...)` — a correlated subquery that collects inner rows into a structured format.
 
-**Approach — `NEST()` with PG composite/array types:**
+**Current implementation — `NEST(SELECT ...)` correlated subquery:**
 
 ```sql
-SELECT o.id, o.date, NEST(i.id, i.name, i.qty) AS items
-FROM orders o
-JOIN order_items i ON o.id = i.order_id
+SELECT n.id, n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id) AS addrs
+FROM names n;
+--  1 | Louis | (123 Main St, 456 Oak Ave)
+--  2 | Alice | (789 Elm St)
 ```
 
-`NEST(...)` returns an array of composite rows — transmitted over the wire as PG
-binary array-of-record, not JSON. This stays within the PostgreSQL wire protocol
-specification:
+`NEST(SELECT ...)` parses a full inner SELECT as a correlated subquery. For each outer row, the inner query is executed with correlated column references resolved against the outer row. The default result is TEXT over the wire — parenthesized tuples for single-column results, nested parenthesized tuples for multi-column results. No matching inner rows produce SQL NULL.
 
-- **Wire-legal**: PostgreSQL already defines array types and composite (record) types
-  with their own OIDs and binary encodings. No protocol extensions needed.
-- **Driver-compatible**: Major drivers (`pgx` for Go, `asyncpg` for Python,
-  `node-postgres`) already decode composite arrays.
-- **`psql`-friendly**: Text representation renders naturally in the terminal.
-- **No pre-defined types**: mulldb synthesizes the composite type from the query's
-  column list at execution time — no `CREATE TYPE` ceremony.
+**Output formats:**
+
+An optional `FORMAT` clause before the closing parenthesis controls the output:
+
+- **Default** (no FORMAT): parenthesized text — `(val1, val2)` or `((v1a, v1b), (v2a, v2b))`
+- **FORMAT JSON**: JSON array of objects — `[{"col":"val1"},{"col":"val2"}]`
+- **FORMAT JSONA**: JSON array of arrays — `[["val1"],["val2"]]`
+
+```sql
+NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id FORMAT JSON)
+-- [{"address":"123 Main St"},{"address":"456 Oak Ave"}]
+
+NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id FORMAT JSONA)
+-- [["123 Main St"],["456 Oak Ave"]]
+```
+
+JSON type mapping: int64/float64 → JSON number, string → JSON string, bool → JSON boolean, time.Time → RFC 3339 string, nil → JSON null. FORMAT/JSON/JSONA are parsed as identifier checks (not keywords), so they don't affect existing SQL like `CREATE TABLE json (...)`.
 
 **Semantics:**
 
-When `NEST()` is used with a JOIN, the executor:
-1. Implicitly groups rows by all non-nested columns — no explicit `GROUP BY` required
-2. Collects the nested columns into an array of composites per group
-3. Returns one row per group with the nested array as a column
+- Inner SELECT supports WHERE (correlated or uncorrelated), ORDER BY, LIMIT, OFFSET
+- Column resolution: qualified refs (`a.col`) resolve by alias/table name; unqualified refs try inner table first, then outer
+- Single inner column: `(val1, val2, val3)`
+- Multiple inner columns: `((v1a, v1b), (v2a, v2b))`
+- No JOINs, GROUP BY, or nested NEST in inner SELECT
+- NEST is only supported in SELECT column list (not WHERE)
 
-This eliminates the Cartesian duplication at the source rather than pushing
-reconstruction to the client.
-
-**Prerequisites**: ~~JOIN support (parser + executor)~~ (**Done** — INNER JOIN with nested-loop execution, table aliases, qualified column references), composite/array type encoding in pgwire.
+**Future evolution**: The text format could be upgraded to PG composite/array binary encoding for proper driver decoding, and the inner SELECT could support JOINs.
 
 ---
 

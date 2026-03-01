@@ -2239,3 +2239,132 @@ func TestParse_GroupByMultiple(t *testing.T) {
 		t.Fatalf("OrderBy = %d, want 1", len(sel.OrderBy))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// NEST(SELECT ...) tests
+// ---------------------------------------------------------------------------
+
+func TestParse_NestBasic(t *testing.T) {
+	stmt, err := Parse("SELECT n.id, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id) FROM names n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	if len(sel.Columns) != 2 {
+		t.Fatalf("columns = %d, want 2", len(sel.Columns))
+	}
+	nest, ok := sel.Columns[1].(*NestExpr)
+	if !ok {
+		t.Fatalf("columns[1] type = %T, want *NestExpr", sel.Columns[1])
+	}
+	if nest.Query.From.Name != "addresses" {
+		t.Errorf("inner FROM = %q, want addresses", nest.Query.From.Name)
+	}
+	if nest.Query.FromAlias != "a" {
+		t.Errorf("inner alias = %q, want a", nest.Query.FromAlias)
+	}
+	if nest.Query.Where == nil {
+		t.Fatal("inner WHERE is nil")
+	}
+}
+
+func TestParse_NestMultiColumn(t *testing.T) {
+	stmt, err := Parse("SELECT NEST(SELECT street, city FROM addr WHERE addr.pid = p.id) FROM people p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	nest := sel.Columns[0].(*NestExpr)
+	if len(nest.Query.Columns) != 2 {
+		t.Fatalf("inner columns = %d, want 2", len(nest.Query.Columns))
+	}
+}
+
+func TestParse_NestNoWhere(t *testing.T) {
+	stmt, err := Parse("SELECT NEST(SELECT x FROM t) FROM outer_t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	nest := sel.Columns[0].(*NestExpr)
+	if nest.Query.Where != nil {
+		t.Error("expected nil WHERE for uncorrelated NEST")
+	}
+}
+
+func TestParse_NestWithAlias(t *testing.T) {
+	stmt, err := Parse("SELECT NEST(SELECT a FROM t WHERE t.id = o.id) AS items FROM o")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	alias, ok := sel.Columns[0].(*AliasExpr)
+	if !ok {
+		t.Fatalf("columns[0] type = %T, want *AliasExpr", sel.Columns[0])
+	}
+	if alias.Alias != "items" {
+		t.Errorf("alias = %q, want items", alias.Alias)
+	}
+	_, ok = alias.Expr.(*NestExpr)
+	if !ok {
+		t.Fatalf("alias.Expr type = %T, want *NestExpr", alias.Expr)
+	}
+}
+
+func TestParse_NestWithOrderByAndLimit(t *testing.T) {
+	stmt, err := Parse("SELECT NEST(SELECT a FROM t WHERE t.x = o.x ORDER BY a LIMIT 5) FROM o")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	nest := sel.Columns[0].(*NestExpr)
+	if len(nest.Query.OrderBy) != 1 {
+		t.Fatalf("inner OrderBy = %d, want 1", len(nest.Query.OrderBy))
+	}
+	if nest.Query.Limit == nil || *nest.Query.Limit != 5 {
+		t.Error("inner LIMIT should be 5")
+	}
+}
+
+func TestParse_NestFormatJSON(t *testing.T) {
+	stmt, err := Parse("SELECT NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id FORMAT JSON) FROM names n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	nest := sel.Columns[0].(*NestExpr)
+	if nest.Format != "JSON" {
+		t.Errorf("Format = %q, want JSON", nest.Format)
+	}
+}
+
+func TestParse_NestFormatJSONA(t *testing.T) {
+	stmt, err := Parse("SELECT NEST(SELECT a.address FROM addresses a FORMAT JSONA) FROM names n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	nest := sel.Columns[0].(*NestExpr)
+	if nest.Format != "JSONA" {
+		t.Errorf("Format = %q, want JSONA", nest.Format)
+	}
+}
+
+func TestParse_NestFormatDefault(t *testing.T) {
+	stmt, err := Parse("SELECT NEST(SELECT a FROM t) FROM o")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	nest := sel.Columns[0].(*NestExpr)
+	if nest.Format != "" {
+		t.Errorf("Format = %q, want empty", nest.Format)
+	}
+}
+
+func TestParse_NestFormatUnsupported(t *testing.T) {
+	_, err := Parse("SELECT NEST(SELECT a FROM t FORMAT XML) FROM o")
+	if err == nil {
+		t.Fatal("expected error for unsupported NEST format")
+	}
+}

@@ -316,6 +316,10 @@ Catalog tables are registered in `init()` functions using a simple registry patt
 
 Scalar functions like `VERSION()` follow a registry pattern. Each function registers itself in an `init()` function with `RegisterScalar(name, fn)`. The executor resolves function calls by looking up the registry, evaluates arguments, and delegates to the registered function. This keeps function implementations decoupled from the executor core.
 
+### NEST (Correlated Subquery)
+
+`NEST(SELECT ...)` is a mulldb extension that embeds a correlated subquery result in each outer row. The parser detects `NEST(SELECT ...)` in `parsePrimary()` and wraps the inner `SelectStmt` in a `NestExpr` AST node (which includes a `Format` field: `""`, `"JSON"`, or `"JSONA"`). The executor compiles the inner query at plan time via `compileNestColumn()`, which produces an `exprFunc` closure. At execution time, for each outer row, the closure scans the inner table, applies the correlated WHERE filter (compiled with `compileCorrelatedExpr()`), evaluates inner columns, applies ORDER BY/LIMIT/OFFSET, and formats results according to the chosen format: `formatNest()` for parenthesized text (default), `formatNestJSON()` for a JSON array of objects with column names as keys, or `formatNestJSONA()` for a JSON array of arrays. Column names for JSON output are captured at compile time from aliases or column refs. Column resolution in the correlated expression compiler resolves qualified refs by alias/table name and unqualified refs by trying the inner table first. The result type is TEXT over the wire for all formats. `FORMAT`/`JSON`/`JSONA` are parsed as identifier checks (not reserved keywords), avoiding impact on existing SQL.
+
 ## Concurrency Model
 
 mulldb uses per-table locking to allow concurrent writes to independent tables. The locking scheme has two levels:

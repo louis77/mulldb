@@ -22,6 +22,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
   - [Arithmetic Expressions](#arithmetic-expressions)
   - [String Concatenation](#string-concatenation)
   - [Scalar Functions](#scalar-functions)
+  - [NEST (Correlated Subquery)](#nest-correlated-subquery)
   - [Catalog Tables](#catalog-tables)
   - [Statement Tracing](#statement-tracing)
   - [WHERE Expressions](#where-expressions)
@@ -50,6 +51,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Aggregate functions** — `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`
 - **String concatenation** — `||` operator (SQL standard, NULL-propagating) and `CONCAT()` function (PostgreSQL extension, NULL-skipping); implicit type coercion for integers and booleans
 - **Scalar functions** — `LENGTH()` / `CHARACTER_LENGTH()` / `CHAR_LENGTH()`, `OCTET_LENGTH()`, `CONCAT()`, `NOW()`, `VERSION()`, math functions (`ABS`, `ROUND`, `CEIL`/`CEILING`, `FLOOR`, `POWER`/`POW`, `SQRT`, `MOD`), and a registration pattern for adding more
+- **NEST(SELECT ...)** — correlated subquery that collects inner rows into parenthesized text; avoids JOIN + GROUP BY for hierarchical data; supports ORDER BY, LIMIT, OFFSET inside the subquery; optional `FORMAT JSON` (array of objects) and `FORMAT JSONA` (array of arrays) for native JSON output
 - **Data types** — INTEGER (64-bit), FLOAT (64-bit IEEE 754), TEXT, BOOLEAN, TIMESTAMP (UTC), NULL
 - **Type casts** — PostgreSQL-style `expr::type` cast syntax; supports INTEGER, TEXT, BOOLEAN, FLOAT, TIMESTAMP targets; chainable (`expr::text::integer`)
 - **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers and floats; implicit int→float promotion in mixed arithmetic; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
@@ -631,6 +633,62 @@ SELECT VERSION();
 ```
 
 Calling an unknown function returns SQLSTATE `42883`. Calling a function with the wrong number of arguments or wrong type also returns `42883`.
+
+### NEST (Correlated Subquery)
+
+`NEST(SELECT ...)` wraps a correlated subquery that collects inner rows into a parenthesized text format, embedded directly in each outer row. This avoids the flatten-then-reaggregate pattern of JOIN + GROUP BY.
+
+```sql
+CREATE TABLE names (id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE addresses (id INTEGER PRIMARY KEY, name_id INTEGER, address TEXT);
+INSERT INTO names VALUES (1, 'Louis'), (2, 'Alice');
+INSERT INTO addresses VALUES (1, 1, '123 Main St'), (2, 1, '456 Oak Ave'), (3, 2, '789 Elm St');
+
+SELECT n.id, n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id) AS addrs
+FROM names n;
+--  id | name  | addrs
+-- ----+-------+------------------------------
+--   1 | Louis | (123 Main St, 456 Oak Ave)
+--   2 | Alice | (789 Elm St)
+```
+
+Multi-column inner SELECT produces nested tuples:
+
+```sql
+NEST(SELECT street, city FROM addresses a WHERE a.name_id = n.id)
+-- ((123 Main St, Springfield), (456 Oak Ave, Shelbyville))
+```
+
+#### FORMAT JSON / FORMAT JSONA
+
+An optional `FORMAT` clause before the closing parenthesis controls the output format. Without `FORMAT`, the default parenthesized text format is used.
+
+`FORMAT JSON` returns a JSON array of objects, with column names as keys:
+
+```sql
+SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id FORMAT JSON) AS addrs
+FROM names n WHERE n.id = 1;
+-- Louis | [{"address":"123 Main St"},{"address":"456 Oak Ave"}]
+
+NEST(SELECT street, city FROM addresses a WHERE a.name_id = n.id FORMAT JSON)
+-- [{"street":"123 Main St","city":"Springfield"},{"street":"456 Oak Ave","city":"Shelbyville"}]
+```
+
+`FORMAT JSONA` returns a JSON array of arrays (positional, no column names):
+
+```sql
+NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id FORMAT JSONA)
+-- [["123 Main St"],["456 Oak Ave"]]
+
+NEST(SELECT street, city FROM addresses a WHERE a.name_id = n.id FORMAT JSONA)
+-- [["123 Main St","Springfield"],["456 Oak Ave","Shelbyville"]]
+```
+
+JSON type mapping: integers and floats become JSON numbers, booleans become JSON booleans, strings become JSON strings, timestamps become ISO 8601 strings, and NULL becomes JSON `null`. No matching inner rows produces SQL NULL for all formats.
+
+The inner SELECT supports `WHERE` (correlated or uncorrelated), `ORDER BY`, `LIMIT`, and `OFFSET`. No matching inner rows produces SQL NULL. Column references in the inner WHERE can be qualified with outer table aliases (e.g. `n.id`) to correlate with the outer row.
+
+**Restrictions:** The inner SELECT must have a `FROM` clause, cannot use JOINs, GROUP BY, or nested NEST. NEST is not supported in WHERE clauses. Result is TEXT over the wire.
 
 ### Catalog Tables
 

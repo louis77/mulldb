@@ -3633,3 +3633,359 @@ func TestExecutor_GroupBy_StarError(t *testing.T) {
 		t.Errorf("error = %v, want SQLSTATE 42803", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// NEST(SELECT ...) tests
+// ---------------------------------------------------------------------------
+
+func setupNest(t *testing.T) *Executor {
+	t.Helper()
+	e := setup(t)
+	exec(t, e, "CREATE TABLE names (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "CREATE TABLE addresses (id INTEGER PRIMARY KEY, name_id INTEGER, address TEXT)")
+	exec(t, e, "INSERT INTO names VALUES (1, 'Louis'), (2, 'Alice'), (3, 'Bob')")
+	exec(t, e, "INSERT INTO addresses VALUES (1, 1, '123 Main St'), (2, 1, '456 Oak Ave'), (3, 2, '789 Elm St')")
+	return e
+}
+
+func TestExecutor_NestBasic(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.id, n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id) FROM names n")
+
+	if len(r.Columns) != 3 {
+		t.Fatalf("columns = %d, want 3", len(r.Columns))
+	}
+	if r.Columns[2].Name != "nest" {
+		t.Errorf("col2 name = %q, want nest", r.Columns[2].Name)
+	}
+	if len(r.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(r.Rows))
+	}
+
+	// Row for Louis (id=1): two addresses.
+	found := false
+	for _, row := range r.Rows {
+		if string(row[1]) == "Louis" {
+			found = true
+			nestVal := string(row[2])
+			if nestVal != "(123 Main St, 456 Oak Ave)" {
+				t.Errorf("Louis nest = %q, want (123 Main St, 456 Oak Ave)", nestVal)
+			}
+		}
+	}
+	if !found {
+		t.Error("Louis row not found")
+	}
+
+	// Row for Alice (id=2): one address.
+	for _, row := range r.Rows {
+		if string(row[1]) == "Alice" {
+			nestVal := string(row[2])
+			if nestVal != "(789 Elm St)" {
+				t.Errorf("Alice nest = %q, want (789 Elm St)", nestVal)
+			}
+		}
+	}
+
+	// Row for Bob (id=3): no addresses → NULL.
+	for _, row := range r.Rows {
+		if string(row[1]) == "Bob" {
+			if row[2] != nil {
+				t.Errorf("Bob nest = %q, want NULL", string(row[2]))
+			}
+		}
+	}
+}
+
+func TestExecutor_NestMultiColumn(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, age INTEGER)")
+	exec(t, e, "INSERT INTO parents VALUES (1, 'Parent1')")
+	exec(t, e, "INSERT INTO children VALUES (1, 1, 'Child1', 10), (2, 1, 'Child2', 12)")
+
+	r := exec(t, e, "SELECT p.name, NEST(SELECT c.name, c.age FROM children c WHERE c.parent_id = p.id) FROM parents p")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	nestVal := string(r.Rows[0][1])
+	if nestVal != "((Child1, 10), (Child2, 12))" {
+		t.Errorf("nest = %q, want ((Child1, 10), (Child2, 12))", nestVal)
+	}
+}
+
+func TestExecutor_NestNoMatches(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id) FROM names n WHERE n.id = 3")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if r.Rows[0][1] != nil {
+		t.Errorf("nest = %q, want NULL", string(r.Rows[0][1]))
+	}
+}
+
+func TestExecutor_NestWithOrderBy(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id ORDER BY address DESC) FROM names n WHERE n.id = 1")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	nestVal := string(r.Rows[0][1])
+	// DESC order: "456 Oak Ave" before "123 Main St".
+	if nestVal != "(456 Oak Ave, 123 Main St)" {
+		t.Errorf("nest = %q, want (456 Oak Ave, 123 Main St)", nestVal)
+	}
+}
+
+func TestExecutor_NestWithLimit(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id ORDER BY a.id LIMIT 1) FROM names n WHERE n.id = 1")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	nestVal := string(r.Rows[0][1])
+	if nestVal != "(123 Main St)" {
+		t.Errorf("nest = %q, want (123 Main St)", nestVal)
+	}
+}
+
+func TestExecutor_NestUncorrelated(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a) FROM names n WHERE n.id = 1")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	nestVal := string(r.Rows[0][1])
+	// All 3 addresses, uncorrelated.
+	if nestVal != "(123 Main St, 456 Oak Ave, 789 Elm St)" {
+		t.Errorf("nest = %q, want (123 Main St, 456 Oak Ave, 789 Elm St)", nestVal)
+	}
+}
+
+func TestExecutor_NestWithAlias(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id) AS addrs FROM names n WHERE n.id = 1")
+
+	if r.Columns[1].Name != "addrs" {
+		t.Errorf("col1 name = %q, want addrs", r.Columns[1].Name)
+	}
+}
+
+func TestExecutor_NestJoinError(t *testing.T) {
+	e := setupNest(t)
+	_, err := e.Execute("SELECT NEST(SELECT a.address FROM addresses a JOIN names n ON a.name_id = n.id) FROM names")
+	if err == nil {
+		t.Fatal("expected error for NEST with JOINs")
+	}
+	qe, ok := err.(*QueryError)
+	if !ok || qe.Code != "0A000" {
+		t.Errorf("error = %v, want SQLSTATE 0A000", err)
+	}
+}
+
+func TestExecutor_NestInnerTableNotFound(t *testing.T) {
+	e := setupNest(t)
+	_, err := e.Execute("SELECT NEST(SELECT x FROM nonexistent WHERE nonexistent.id = n.id) FROM names n")
+	if err == nil {
+		t.Fatal("expected error for NEST with nonexistent inner table")
+	}
+}
+
+func TestFormatNest(t *testing.T) {
+	tests := []struct {
+		name string
+		rows [][]any
+		want string
+	}{
+		{"empty", nil, ""},
+		{"single_col_single_row", [][]any{{"hello"}}, "(hello)"},
+		{"single_col_multi_row", [][]any{{"a"}, {"b"}, {"c"}}, "(a, b, c)"},
+		{"multi_col_single_row", [][]any{{"x", int64(1)}}, "((x, 1))"},
+		{"multi_col_multi_row", [][]any{{"x", int64(1)}, {"y", int64(2)}}, "((x, 1), (y, 2))"},
+		{"with_null", [][]any{{"a"}, {nil}}, "(a, NULL)"},
+		{"bool_values", [][]any{{true}, {false}}, "(t, f)"},
+		{"int_values", [][]any{{int64(42)}}, "(42)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatNest(tt.rows)
+			if tt.want == "" {
+				if got != nil {
+					t.Errorf("formatNest = %q, want nil", string(got))
+				}
+				return
+			}
+			if string(got) != tt.want {
+				t.Errorf("formatNest = %q, want %q", string(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestExecutor_NestFormatJSON_SingleCol(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id ORDER BY a.id FORMAT JSON) FROM names n WHERE n.id = 1")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	got := string(r.Rows[0][1])
+	want := `[{"address":"123 Main St"},{"address":"456 Oak Ave"}]`
+	if got != want {
+		t.Errorf("nest JSON = %q, want %q", got, want)
+	}
+}
+
+func TestExecutor_NestFormatJSON_MultiCol(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, age INTEGER)")
+	exec(t, e, "INSERT INTO parents VALUES (1, 'Parent1')")
+	exec(t, e, "INSERT INTO children VALUES (1, 1, 'Child1', 10), (2, 1, 'Child2', 12)")
+
+	r := exec(t, e, "SELECT p.name, NEST(SELECT c.name, c.age FROM children c WHERE c.parent_id = p.id ORDER BY c.id FORMAT JSON) FROM parents p")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	got := string(r.Rows[0][1])
+	want := `[{"age":10,"name":"Child1"},{"age":12,"name":"Child2"}]`
+	if got != want {
+		t.Errorf("nest JSON = %q, want %q", got, want)
+	}
+}
+
+func TestExecutor_NestFormatJSON_NoMatches(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id FORMAT JSON) FROM names n WHERE n.id = 3")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if r.Rows[0][1] != nil {
+		t.Errorf("expected nil for no matches, got %v", r.Rows[0][1])
+	}
+}
+
+func TestExecutor_NestFormatJSON_WithNull(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+	exec(t, e, "INSERT INTO t VALUES (1, NULL)")
+
+	r := exec(t, e, "SELECT NEST(SELECT t.val FROM t FORMAT JSON) FROM t WHERE t.id = 1")
+
+	got := string(r.Rows[0][0])
+	want := `[{"val":null}]`
+	if got != want {
+		t.Errorf("nest JSON = %q, want %q", got, want)
+	}
+}
+
+func TestExecutor_NestFormatJSON_TypedValues(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER PRIMARY KEY, flag BOOLEAN, count INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES (1, true, 42)")
+
+	r := exec(t, e, "SELECT NEST(SELECT t.flag, t.count FROM t FORMAT JSON) FROM t WHERE t.id = 1")
+
+	got := string(r.Rows[0][0])
+	want := `[{"count":42,"flag":true}]`
+	if got != want {
+		t.Errorf("nest JSON = %q, want %q", got, want)
+	}
+}
+
+func TestExecutor_NestFormatJSONA_SingleCol(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id ORDER BY a.id FORMAT JSONA) FROM names n WHERE n.id = 1")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	got := string(r.Rows[0][1])
+	want := `[["123 Main St"],["456 Oak Ave"]]`
+	if got != want {
+		t.Errorf("nest JSONA = %q, want %q", got, want)
+	}
+}
+
+func TestExecutor_NestFormatJSONA_MultiCol(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT)")
+	exec(t, e, "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, age INTEGER)")
+	exec(t, e, "INSERT INTO parents VALUES (1, 'Parent1')")
+	exec(t, e, "INSERT INTO children VALUES (1, 1, 'Child1', 10), (2, 1, 'Child2', 12)")
+
+	r := exec(t, e, "SELECT p.name, NEST(SELECT c.name, c.age FROM children c WHERE c.parent_id = p.id ORDER BY c.id FORMAT JSONA) FROM parents p")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	got := string(r.Rows[0][1])
+	want := `[["Child1",10],["Child2",12]]`
+	if got != want {
+		t.Errorf("nest JSONA = %q, want %q", got, want)
+	}
+}
+
+func TestExecutor_NestFormatJSONA_NoMatches(t *testing.T) {
+	e := setupNest(t)
+	r := exec(t, e, "SELECT n.name, NEST(SELECT a.address FROM addresses a WHERE a.name_id = n.id FORMAT JSONA) FROM names n WHERE n.id = 3")
+
+	if len(r.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(r.Rows))
+	}
+	if r.Rows[0][1] != nil {
+		t.Errorf("expected nil for no matches, got %v", r.Rows[0][1])
+	}
+}
+
+func TestFormatNestJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		rows     [][]any
+		colNames []string
+		want     string
+	}{
+		{"single_col", [][]any{{"hello"}}, []string{"col"}, `[{"col":"hello"}]`},
+		{"multi_col", [][]any{{"a", int64(1)}}, []string{"name", "id"}, `[{"id":1,"name":"a"}]`},
+		{"null_value", [][]any{{nil}}, []string{"col"}, `[{"col":null}]`},
+		{"bool_int", [][]any{{true, int64(5)}}, []string{"flag", "n"}, `[{"flag":true,"n":5}]`},
+		{"float", [][]any{{float64(3.14)}}, []string{"pi"}, `[{"pi":3.14}]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(formatNestJSON(tt.rows, tt.colNames))
+			if got != tt.want {
+				t.Errorf("formatNestJSON = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatNestJSONA(t *testing.T) {
+	tests := []struct {
+		name string
+		rows [][]any
+		want string
+	}{
+		{"single_col", [][]any{{"hello"}}, `[["hello"]]`},
+		{"multi_col", [][]any{{"a", int64(1)}}, `[["a",1]]`},
+		{"null_value", [][]any{{nil}}, `[[null]]`},
+		{"multi_row", [][]any{{"a"}, {"b"}}, `[["a"],["b"]]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(formatNestJSONA(tt.rows))
+			if got != tt.want {
+				t.Errorf("formatNestJSONA = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

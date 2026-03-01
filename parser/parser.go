@@ -445,7 +445,11 @@ func (p *parser) parseParenExprList() ([]Expr, error) {
 
 func (p *parser) parseSelect() (*SelectStmt, error) {
 	p.next() // skip SELECT
+	return p.parseSelectBody()
+}
 
+// parseSelectBody parses everything after the SELECT keyword: columns, FROM, WHERE, etc.
+func (p *parser) parseSelectBody() (*SelectStmt, error) {
 	var columns []Expr
 	for {
 		if p.cur.Type == TokenStar {
@@ -653,7 +657,7 @@ func isSelectClauseKeyword(ident string) bool {
 	switch strings.ToUpper(ident) {
 	case "WHERE", "ORDER", "LIMIT", "OFFSET", "JOIN", "INNER", "ON",
 		"LEFT", "RIGHT", "OUTER", "CROSS", "FULL", "GROUP", "HAVING",
-		"INDEXED":
+		"INDEXED", "FORMAT":
 		return true
 	}
 	return false
@@ -1073,6 +1077,31 @@ func (p *parser) parsePrimary() (Expr, error) {
 		}
 		// function call: NAME(arg, arg, ...)
 		p.next() // consume (
+		// NEST(SELECT ...) — correlated subquery
+		if strings.ToUpper(name) == "NEST" && p.cur.Type == TokenSelect {
+			p.next() // consume SELECT
+			query, err := p.parseSelectBody()
+			if err != nil {
+				return nil, err
+			}
+			// Optional FORMAT JSON / FORMAT JSONA.
+			var format string
+			if p.cur.Type == TokenIdent && strings.ToUpper(p.cur.Literal) == "FORMAT" {
+				p.next() // consume FORMAT
+				if p.cur.Type != TokenIdent {
+					return nil, fmt.Errorf("expected JSON or JSONA after FORMAT at position %d", p.cur.Pos)
+				}
+				format = strings.ToUpper(p.cur.Literal)
+				if format != "JSON" && format != "JSONA" {
+					return nil, fmt.Errorf("unsupported NEST format %q at position %d", p.cur.Literal, p.cur.Pos)
+				}
+				p.next() // consume JSON/JSONA
+			}
+			if _, err := p.expect(TokenRParen); err != nil {
+				return nil, err
+			}
+			return &NestExpr{Query: query, Format: format}, nil
+		}
 		var args []Expr
 		if p.cur.Type == TokenStar {
 			args = []Expr{&StarExpr{}}
