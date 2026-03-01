@@ -517,6 +517,45 @@ func TestExecutor_Aggregate_MixedError(t *testing.T) {
 	}
 }
 
+func TestExecutor_Aggregate_WithWhere(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (category TEXT, val INTEGER)")
+	exec(t, e, "INSERT INTO t VALUES ('a', 10), ('b', 20), ('a', 30), ('b', 40), ('a', 50)")
+
+	// COUNT(*) with WHERE
+	r := exec(t, e, "SELECT COUNT(*) FROM t WHERE category = 'a'")
+	if string(r.Rows[0][0]) != "3" {
+		t.Errorf("count = %q, want 3", r.Rows[0][0])
+	}
+
+	// SUM with WHERE
+	r = exec(t, e, "SELECT SUM(val) FROM t WHERE category = 'b'")
+	if string(r.Rows[0][0]) != "60" {
+		t.Errorf("sum = %q, want 60", r.Rows[0][0])
+	}
+
+	// MIN/MAX with WHERE
+	r = exec(t, e, "SELECT MIN(val), MAX(val) FROM t WHERE category = 'a'")
+	if string(r.Rows[0][0]) != "10" {
+		t.Errorf("min = %q, want 10", r.Rows[0][0])
+	}
+	if string(r.Rows[0][1]) != "50" {
+		t.Errorf("max = %q, want 50", r.Rows[0][1])
+	}
+
+	// AVG with WHERE
+	r = exec(t, e, "SELECT AVG(val) FROM t WHERE category = 'a'")
+	if string(r.Rows[0][0]) != "30" {
+		t.Errorf("avg = %q, want 30", r.Rows[0][0])
+	}
+
+	// WHERE that matches no rows
+	r = exec(t, e, "SELECT COUNT(*), SUM(val) FROM t WHERE category = 'x'")
+	if string(r.Rows[0][0]) != "0" {
+		t.Errorf("count = %q, want 0", r.Rows[0][0])
+	}
+}
+
 // -------------------------------------------------------------------------
 // AS alias
 // -------------------------------------------------------------------------

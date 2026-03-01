@@ -811,7 +811,17 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		execStart = time.Now()
 	}
 
-	// Scan all rows and accumulate.
+	// Build the WHERE filter.
+	var filter func(storage.Row) bool
+	if s.Where != nil {
+		var ferr error
+		filter, ferr = buildFilter(s.Where, def)
+		if ferr != nil {
+			return nil, WrapError(ferr)
+		}
+	}
+
+	// Scan rows and accumulate.
 	var it storage.RowIterator
 	var err error
 	if isCatalogTable(s.From.Schema, s.From.Name) {
@@ -831,6 +841,9 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 			break
 		}
 		scanned++
+		if filter != nil && !filter(row) {
+			continue
+		}
 		for _, acc := range accs {
 			switch acc.funcName {
 			case "COUNT":
