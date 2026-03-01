@@ -53,6 +53,7 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers and floats; implicit int→float promotion in mixed arithmetic; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
 - **Pattern matching** — `LIKE` / `NOT LIKE` (case-sensitive), `ILIKE` / `NOT ILIKE` (case-insensitive, PostgreSQL extension); `%` matches zero or more characters, `_` matches exactly one Unicode codepoint; `ESCAPE` clause for literal `%`/`_`; NULL propagation
 - **IN predicate** — `IN (v1, v2, ...)` and `NOT IN (v1, v2, ...)`; SQL-standard three-valued NULL logic (NULL LHS → NULL, NULL in list with no match → NULL)
+- **Implicit type coercion** — comparisons and IN predicates automatically coerce literals to match column types at compile time (e.g., `WHERE id = '123'` coerces the string to integer); invalid coercions return SQLSTATE `22P02`
 - **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `LIKE` / `ILIKE`, `IN` / `NOT IN`, `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
 - **Full UTF-8 support** — identifiers, string literals, and all data are UTF-8 throughout; no other character encoding exists
 - **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`), Unicode identifiers (`"café"`, `"名前"`)
@@ -752,6 +753,24 @@ SELECT * FROM t WHERE id IN (1 + 1, 4);            -- expressions in list
 ```
 
 NULL behavior: if the LHS is NULL, the result is always NULL. If no match is found and the list contains NULL, the result is NULL (not false). This means `NOT IN` with a NULL in the list never returns true for non-matching values — a common SQL gotcha.
+
+**Implicit type coercion.** When comparing a column to a literal of a different type, the literal is automatically coerced to the column's type at compile time. This applies to all comparison operators (`=`, `!=`, `<`, `>`, `<=`, `>=`) and `IN` lists. Invalid coercions produce an error with SQLSTATE `22P02`.
+
+```sql
+-- String literal coerced to integer for comparison:
+SELECT * FROM t WHERE id = '123';
+
+-- Works with IN lists too:
+SELECT * FROM t WHERE id IN ('1', '2', '3');
+
+-- Integer literal coerced to text:
+SELECT * FROM t WHERE name = 42;
+
+-- Invalid coercion produces an error:
+SELECT * FROM t WHERE id = 'hello';  -- ERROR: invalid input syntax for type integer: "hello"
+```
+
+Supported coercion paths: string→integer, string→float, string→boolean (`true/false/t/f/1/0`), string→timestamp, int→float, float→int (whole numbers only), int→text, float→text, bool→text.
 
 Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / `[NOT] LIKE` / `[NOT] ILIKE` / `[NOT] IN` / `IS [NOT] NULL` → `+` `-` `||` → `*` `/` `%` → unary `-` → primary.
 

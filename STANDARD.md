@@ -19,7 +19,7 @@ Legend: **Done** = implemented, **Partial** = partially implemented, **Open** = 
 | E011-03 | DECIMAL and NUMERIC data types | Open |
 | E011-04 | Arithmetic operators | **Done** (`+`, `-`, `*`, `/`, `%` on integers and floats; unary minus; implicit int→float promotion; NULL propagation; division by zero → SQLSTATE 22012) |
 | E011-05 | Numeric comparison | **Done** |
-| E011-06 | Implicit casting among numeric data types | **Done** (implicit int64→float64 promotion in mixed arithmetic and comparisons) |
+| E011-06 | Implicit casting among numeric data types | **Done** (implicit int64→float64 promotion in mixed arithmetic and comparisons; implicit string→integer and string→float coercion in WHERE comparisons and IN predicates) |
 
 ## E021 — Character string types
 

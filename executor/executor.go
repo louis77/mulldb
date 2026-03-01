@@ -1186,8 +1186,10 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 		})
 
 	case *parser.InExpr:
-		return compileInExpr(e, func(expr parser.Expr) (exprFunc, error) {
+		return compileInExprCoerced(e, func(expr parser.Expr) (exprFunc, error) {
 			return compileJoinExpr(expr, scope)
+		}, func(lhs parser.Expr, values []parser.Expr, valFns []exprFunc) ([]exprFunc, error) {
+			return coerceJoinInValues(lhs, values, valFns, scope)
 		})
 
 	case *parser.CastExpr:
@@ -1236,6 +1238,15 @@ func compileJoinBinaryExpr(e *parser.BinaryExpr, scope *joinScope) (exprFunc, er
 	right, err := compileJoinExpr(e.Right, scope)
 	if err != nil {
 		return nil, err
+	}
+
+	// Coerce literals to match column types for comparison operators.
+	switch e.Op {
+	case "=", "!=", "<", ">", "<=", ">=":
+		left, right, err = tryCoerceJoinOperands(e.Left, e.Right, left, right, scope)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	switch e.Op {
@@ -2102,8 +2113,10 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 		})
 
 	case *parser.InExpr:
-		return compileInExpr(e, func(expr parser.Expr) (exprFunc, error) {
+		return compileInExprCoerced(e, func(expr parser.Expr) (exprFunc, error) {
 			return compileExpr(expr, def)
+		}, func(lhs parser.Expr, values []parser.Expr, valFns []exprFunc) ([]exprFunc, error) {
+			return coerceInValues(lhs, values, valFns, def)
 		})
 
 	case *parser.CastExpr:
@@ -2277,6 +2290,53 @@ func compileInExpr(e *parser.InExpr, compile func(parser.Expr) (exprFunc, error)
 	}, nil
 }
 
+// compileInExprCoerced is like compileInExpr but applies type coercion to
+// literal values in the IN list at compile time.
+func compileInExprCoerced(
+	e *parser.InExpr,
+	compile func(parser.Expr) (exprFunc, error),
+	coerce func(parser.Expr, []parser.Expr, []exprFunc) ([]exprFunc, error),
+) (exprFunc, error) {
+	lhsFn, err := compile(e.Expr)
+	if err != nil {
+		return nil, err
+	}
+	valFns := make([]exprFunc, len(e.Values))
+	for i, v := range e.Values {
+		fn, err := compile(v)
+		if err != nil {
+			return nil, err
+		}
+		valFns[i] = fn
+	}
+	valFns, err = coerce(e.Expr, e.Values, valFns)
+	if err != nil {
+		return nil, err
+	}
+	not := e.Not
+	return func(r storage.Row) any {
+		lhs := lhsFn(r)
+		if lhs == nil {
+			return nil
+		}
+		hasNull := false
+		for _, vFn := range valFns {
+			v := vFn(r)
+			if v == nil {
+				hasNull = true
+				continue
+			}
+			if storage.CompareValues(lhs, v) == 0 {
+				return !not
+			}
+		}
+		if hasNull {
+			return nil
+		}
+		return not
+	}, nil
+}
+
 func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, error) {
 	left, err := compileExpr(e.Left, def)
 	if err != nil {
@@ -2285,6 +2345,15 @@ func compileBinaryExpr(e *parser.BinaryExpr, def *storage.TableDef) (exprFunc, e
 	right, err := compileExpr(e.Right, def)
 	if err != nil {
 		return nil, err
+	}
+
+	// Coerce literals to match column types for comparison operators.
+	switch e.Op {
+	case "=", "!=", "<", ">", "<=", ">=":
+		left, right, err = tryCoerceOperands(e.Left, e.Right, left, right, def)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	switch e.Op {
