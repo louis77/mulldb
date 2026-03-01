@@ -185,8 +185,14 @@ func (c *Connection) handleQuery(query string) error {
 		return c.handleBegin(query)
 	case upper == "COMMIT" || upper == "END" || upper == "END TRANSACTION":
 		return c.handleCommit(query)
+	case strings.HasPrefix(upper, "ROLLBACK TO SAVEPOINT ") || strings.HasPrefix(upper, "ROLLBACK TO "):
+		return c.handleSavepoint(query) // no-op, same as SAVEPOINT
 	case upper == "ROLLBACK" || upper == "ABORT":
 		return c.handleRollback(query)
+	case strings.HasPrefix(upper, "SAVEPOINT "):
+		return c.handleSavepoint(query)
+	case strings.HasPrefix(upper, "RELEASE SAVEPOINT ") || strings.HasPrefix(upper, "RELEASE "):
+		return c.handleReleaseSavepoint(query)
 	}
 
 	// In failed-transaction state, reject everything except ROLLBACK.
@@ -382,6 +388,31 @@ func (c *Connection) handleRollback(query string) error {
 	}
 	if c.cfg.LogLevel >= 1 {
 		log.Printf("[SQL] OK     %s — ROLLBACK", query)
+	}
+	return c.sendReady()
+}
+
+// handleSavepoint accepts SAVEPOINT commands (e.g. from psql's
+// ON_ERROR_ROLLBACK feature) and acknowledges them as no-ops.
+// Actual savepoint semantics are not implemented.
+func (c *Connection) handleSavepoint(query string) error {
+	if err := c.writer.WriteCommandComplete("SAVEPOINT"); err != nil {
+		return err
+	}
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] OK     %s — SAVEPOINT (no-op)", query)
+	}
+	return c.sendReady()
+}
+
+// handleReleaseSavepoint accepts RELEASE SAVEPOINT commands and
+// acknowledges them as no-ops.
+func (c *Connection) handleReleaseSavepoint(query string) error {
+	if err := c.writer.WriteCommandComplete("RELEASE"); err != nil {
+		return err
+	}
+	if c.cfg.LogLevel >= 1 {
+		log.Printf("[SQL] OK     %s — RELEASE SAVEPOINT (no-op)", query)
 	}
 	return c.sendReady()
 }
