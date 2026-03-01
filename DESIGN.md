@@ -284,7 +284,7 @@ This is faster than re-walking the AST for every row, which matters when scannin
 
 Queries with aggregate functions (COUNT, SUM, AVG, MIN, MAX) follow a separate code path from regular SELECT. The executor first detects whether a query is all-aggregate, all-non-aggregate, or mixed. Mixed queries (like `SELECT id, COUNT(*) FROM t`) are rejected with SQLSTATE code 42803, matching PostgreSQL behavior (no GROUP BY support yet).
 
-For all-aggregate queries, the executor makes a single pass over the table, updating accumulator state for each function. COUNT increments a counter (skipping NULLs for `COUNT(col)`, not for `COUNT(*)`). SUM adds values. AVG tracks sum and non-NULL count, then divides to produce a FLOAT result (NULL for empty or all-NULL sets). MIN and MAX track extrema. After the scan, a single result row is produced.
+For all-aggregate queries, the executor first attempts index-based row retrieval: if the WHERE clause is a simple equality on the primary key column, it uses `LookupByPK()` for an O(log n) lookup; if `INDEXED BY <name>` is specified, it uses the named secondary index. Otherwise it falls back to a full table scan. In all cases, matching rows feed into the same accumulation logic. COUNT increments a counter (skipping NULLs for `COUNT(col)`, not for `COUNT(*)`). SUM adds values. AVG tracks sum and non-NULL count, then divides to produce a FLOAT result (NULL for empty or all-NULL sets). MIN and MAX track extrema. After the scan, a single result row is produced.
 
 ### Primary Key Optimization
 
@@ -403,6 +403,6 @@ The CREATE TABLE entry (WAL v3) includes a uint16 ordinal per column. Migration 
 - **Transactions:** Each statement is atomic on its own. Multi-statement transactions would require undo logs, savepoints, and isolation levels — significant complexity for a project focused on simplicity.
 - **Extended query protocol:** Prepared statements and parameter binding would double the wire protocol code. The simple query flow covers all interactive use cases.
 - **Disk-based storage:** All data lives in memory (reconstructed from WAL on startup). A disk-based B-tree or LSM tree would be the natural next step for datasets larger than RAM.
-- **Query optimizer:** There is no cost-based optimizer. The only optimization is the PK index lookup. Everything else is a sequential scan with filter. This is fine for small tables and keeps execution predictable.
+- **Query optimizer:** There is no cost-based optimizer. The only optimizations are PK index lookups and explicit `INDEXED BY` secondary index lookups (both supported for regular and aggregate queries). Everything else is a sequential scan with filter. This is fine for small tables and keeps execution predictable.
 - **GROUP BY / HAVING / JOIN:** These require more complex execution operators (hash join, sort-merge, grouping). The current aggregate path handles the simplest case (whole-table aggregation). ORDER BY is supported for non-aggregate queries.
 - **MVCC:** Readers see the latest committed state. There is no multi-version concurrency control or snapshot isolation across statements.

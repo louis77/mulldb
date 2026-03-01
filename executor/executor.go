@@ -821,29 +821,30 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 		}
 	}
 
-	// Scan rows and accumulate.
-	var it storage.RowIterator
-	var err error
-	if isCatalogTable(s.From.Schema, s.From.Name) {
-		it, err = scanCatalogTable(s.From.Schema, s.From.Name, e.engine)
-	} else {
-		it, err = e.engine.Scan(s.From.Name)
-	}
-	if err != nil {
-		return nil, WrapError(err)
-	}
-	defer it.Close()
+	// Try index lookups for aggregate queries with WHERE.
+	isCatalog := isCatalogTable(s.From.Schema, s.From.Name)
+	var indexRows []storage.Row
+	var usedIndex string
 
-	var scanned int64
-	for {
-		row, ok := it.Next()
-		if !ok {
-			break
+	if !isCatalog && s.Where != nil {
+		// Try PK index lookup.
+		if row, ok := e.tryPKLookup(s.Where, def); ok {
+			indexRows = []storage.Row{*row}
+			usedIndex = "PRIMARY"
 		}
-		scanned++
-		if filter != nil && !filter(row) {
-			continue
+		// Try explicit INDEXED BY.
+		if usedIndex == "" && s.IndexedBy != "" {
+			rows, ierr := e.lookupByNamedIndex(s.IndexedBy, s.Where, def)
+			if ierr != nil {
+				return nil, ierr
+			}
+			indexRows = rows
+			usedIndex = s.IndexedBy
 		}
+	}
+
+	// accumulate applies one row to all aggregate accumulators.
+	accumulate := func(row storage.Row) {
 		for _, acc := range accs {
 			switch acc.funcName {
 			case "COUNT":
@@ -860,21 +861,19 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 				}
 			case "MIN":
 				v := storage.RowValue(row.Values, acc.colIdx)
-				if v == nil {
-					continue
-				}
-				if !acc.hasV || storage.CompareValues(v, acc.minV) < 0 {
-					acc.minV = v
-					acc.hasV = true
+				if v != nil {
+					if !acc.hasV || storage.CompareValues(v, acc.minV) < 0 {
+						acc.minV = v
+						acc.hasV = true
+					}
 				}
 			case "MAX":
 				v := storage.RowValue(row.Values, acc.colIdx)
-				if v == nil {
-					continue
-				}
-				if !acc.hasV || storage.CompareValues(v, acc.maxV) > 0 {
-					acc.maxV = v
-					acc.hasV = true
+				if v != nil {
+					if !acc.hasV || storage.CompareValues(v, acc.maxV) > 0 {
+						acc.maxV = v
+						acc.hasV = true
+					}
 				}
 			case "AVG":
 				val := storage.RowValue(row.Values, acc.colIdx)
@@ -887,6 +886,44 @@ func (e *Executor) execSelectAggregate(s *parser.SelectStmt, def *storage.TableD
 					acc.countNonNull++
 				}
 			}
+		}
+	}
+
+	// Scan rows and accumulate.
+	var scanned int64
+	if usedIndex != "" {
+		if tr != nil {
+			tr.IndexName = usedIndex
+		}
+		for _, row := range indexRows {
+			scanned++
+			if filter != nil && !filter(row) {
+				continue
+			}
+			accumulate(row)
+		}
+	} else {
+		var it storage.RowIterator
+		var err error
+		if isCatalog {
+			it, err = scanCatalogTable(s.From.Schema, s.From.Name, e.engine)
+		} else {
+			it, err = e.engine.Scan(s.From.Name)
+		}
+		if err != nil {
+			return nil, WrapError(err)
+		}
+		defer it.Close()
+		for {
+			row, ok := it.Next()
+			if !ok {
+				break
+			}
+			scanned++
+			if filter != nil && !filter(row) {
+				continue
+			}
+			accumulate(row)
 		}
 	}
 

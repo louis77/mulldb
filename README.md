@@ -197,6 +197,8 @@ SELECT SUM(<column>) FROM <table>;
 SELECT MIN(<column>) FROM <table>;
 SELECT MAX(<column>) FROM <table>;
 SELECT COUNT(*), SUM(<column>), AVG(<column>), MIN(<column>), MAX(<column>) FROM <table>;
+SELECT COUNT(*) FROM <table> WHERE <pk_col> = <val>;                        -- uses PK index
+SELECT COUNT(*) FROM <table> INDEXED BY <index> WHERE <col> = <val>;        -- uses named index
 
 -- Update rows
 UPDATE <table> SET <column> = <value>, ... WHERE <condition>;
@@ -248,6 +250,8 @@ Output format is always `2024-01-15 10:30:00+00`. The `NOW()` function returns t
 ### Aggregate Functions
 
 Aggregate functions collapse all matching rows into a single result row. Multiple aggregates can appear in the same `SELECT`. Mixing aggregate and non-aggregate columns in the same `SELECT` is an error (SQLSTATE `42803`) — `GROUP BY` is not supported.
+
+Aggregate queries support index acceleration: primary key lookups are automatic when the WHERE clause is a simple PK equality, and secondary indexes can be used via `INDEXED BY <name>`. Without an applicable index, aggregates fall back to a full table scan.
 
 | Function | Argument | Returns | Description |
 |----------|----------|---------|-------------|
