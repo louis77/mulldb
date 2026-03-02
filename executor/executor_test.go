@@ -3989,3 +3989,135 @@ func TestFormatNestJSONA(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// BETWEEN
+// ---------------------------------------------------------------------------
+
+func TestExecutor_BetweenInteger(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3), (4), (5)")
+
+	r := exec(t, e, "SELECT id FROM t WHERE id BETWEEN 2 AND 4")
+	if len(r.Rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(r.Rows))
+	}
+}
+
+func TestExecutor_BetweenText(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (name TEXT)")
+	exec(t, e, "INSERT INTO t (name) VALUES ('Alice'), ('Bob'), ('Charlie'), ('Dave')")
+
+	r := exec(t, e, "SELECT name FROM t WHERE name BETWEEN 'B' AND 'D'")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (Bob, Charlie)", len(r.Rows))
+	}
+}
+
+func TestExecutor_NotBetween(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3), (4), (5)")
+
+	r := exec(t, e, "SELECT id FROM t WHERE id NOT BETWEEN 2 AND 4")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_BetweenInclusive(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3)")
+
+	// Both endpoints should be included.
+	r := exec(t, e, "SELECT id FROM t WHERE id BETWEEN 1 AND 3")
+	if len(r.Rows) != 3 {
+		t.Fatalf("got %d rows, want 3 (all included)", len(r.Rows))
+	}
+}
+
+func TestExecutor_BetweenNullExpr(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (NULL), (3)")
+
+	// NULL BETWEEN 1 AND 3 → NULL → row excluded
+	r := exec(t, e, "SELECT id FROM t WHERE id BETWEEN 1 AND 3")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(r.Rows))
+	}
+}
+
+func TestExecutor_BetweenNullBound(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER)")
+	exec(t, e, "INSERT INTO t (id) VALUES (1), (2), (3)")
+
+	// x BETWEEN NULL AND 3 → NULL → row excluded
+	r := exec(t, e, "SELECT id FROM t WHERE id BETWEEN NULL AND 3")
+	if len(r.Rows) != 0 {
+		t.Fatalf("got %d rows, want 0", len(r.Rows))
+	}
+
+	// x BETWEEN 1 AND NULL → NULL → row excluded
+	r = exec(t, e, "SELECT id FROM t WHERE id BETWEEN 1 AND NULL")
+	if len(r.Rows) != 0 {
+		t.Fatalf("got %d rows, want 0", len(r.Rows))
+	}
+}
+
+func TestExecutor_BetweenUpdateDelete(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (id INTEGER, val TEXT)")
+	exec(t, e, "INSERT INTO t (id, val) VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')")
+
+	// UPDATE with BETWEEN
+	r := exec(t, e, "UPDATE t SET val = 'x' WHERE id BETWEEN 2 AND 3")
+	if r.Tag != "UPDATE 2" {
+		t.Fatalf("update tag = %q, want UPDATE 2", r.Tag)
+	}
+
+	// DELETE with BETWEEN
+	r = exec(t, e, "DELETE FROM t WHERE id BETWEEN 3 AND 4")
+	if r.Tag != "DELETE 2" {
+		t.Fatalf("delete tag = %q, want DELETE 2", r.Tag)
+	}
+}
+
+func TestExecutor_BetweenJoin(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t1 (id INTEGER, lo INTEGER, hi INTEGER)")
+	exec(t, e, "CREATE TABLE t2 (val INTEGER)")
+	exec(t, e, "INSERT INTO t1 (id, lo, hi) VALUES (1, 10, 20), (2, 30, 40)")
+	exec(t, e, "INSERT INTO t2 (val) VALUES (15), (35), (50)")
+
+	r := exec(t, e, "SELECT t2.val FROM t1 JOIN t2 ON t2.val BETWEEN t1.lo AND t1.hi")
+	if len(r.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (15 and 35)", len(r.Rows))
+	}
+}
+
+func TestExecutor_BetweenTimestamp(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (ts TIMESTAMP)")
+	exec(t, e, "INSERT INTO t (ts) VALUES ('2024-01-01'), ('2024-06-15'), ('2024-12-31')")
+
+	r := exec(t, e, "SELECT ts FROM t WHERE ts BETWEEN '2024-03-01' AND '2024-09-30'")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+}
+
+func TestExecutor_BetweenFloat(t *testing.T) {
+	e := setup(t)
+	exec(t, e, "CREATE TABLE t (val FLOAT)")
+	exec(t, e, "INSERT INTO t (val) VALUES (1.5), (2.5), (3.5)")
+
+	r := exec(t, e, "SELECT val FROM t WHERE val BETWEEN 2.0 AND 3.0")
+	if len(r.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(r.Rows))
+	}
+}

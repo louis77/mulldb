@@ -259,6 +259,14 @@ type InExpr struct {
 	Not    bool // true for NOT IN
 }
 
+// BetweenExpr represents [NOT] BETWEEN low AND high.
+type BetweenExpr struct {
+	Expr Expr // value being tested
+	Low  Expr // lower bound (inclusive)
+	High Expr // upper bound (inclusive)
+	Not  bool // true for NOT BETWEEN
+}
+
 // CastExpr represents expr::type (PostgreSQL-style type cast).
 type CastExpr struct {
 	Expr     Expr
@@ -286,5 +294,6 @@ func (*IsNullExpr) exprNode()        {}
 func (*NotExpr) exprNode()           {}
 func (*LikeExpr) exprNode()          {}
 func (*InExpr) exprNode()            {}
+func (*BetweenExpr) exprNode()       {}
 func (*CastExpr) exprNode()          {}
 func (*NestExpr) exprNode()          {}

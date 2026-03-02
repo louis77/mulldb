@@ -57,8 +57,9 @@ mulldb is designed for correctness and clarity over raw performance — a usable
 - **Arithmetic expressions** — `+`, `-`, `*`, `/`, `%` (modulo) and unary minus on integers and floats; implicit int→float promotion in mixed arithmetic; works in SELECT, WHERE, INSERT VALUES, and UPDATE SET; NULL propagation and division-by-zero errors follow PostgreSQL semantics
 - **Pattern matching** — `LIKE` / `NOT LIKE` (case-sensitive), `ILIKE` / `NOT ILIKE` (case-insensitive, PostgreSQL extension); `%` matches zero or more characters, `_` matches exactly one Unicode codepoint; `ESCAPE` clause for literal `%`/`_`; NULL propagation
 - **IN predicate** — `IN (v1, v2, ...)` and `NOT IN (v1, v2, ...)`; SQL-standard three-valued NULL logic (NULL LHS → NULL, NULL in list with no match → NULL)
+- **BETWEEN predicate** — `BETWEEN low AND high` and `NOT BETWEEN low AND high`; inclusive bounds; SQL-standard NULL propagation (any NULL operand → NULL); works in WHERE, JOIN ON, and correlated subqueries
 - **Implicit type coercion** — comparisons and IN predicates automatically coerce literals to match column types at compile time (e.g., `WHERE id = '123'` coerces the string to integer); invalid coercions return SQLSTATE `22P02`
-- **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `LIKE` / `ILIKE`, `IN` / `NOT IN`, `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
+- **WHERE clauses** — comparisons (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), arithmetic (`+`, `-`, `*`, `/`, `%`), `LIKE` / `ILIKE`, `IN` / `NOT IN`, `BETWEEN` / `NOT BETWEEN`, `IS NULL` / `IS NOT NULL`, logical (`AND`, `OR`, `NOT`), parenthesized expressions; NULL comparisons follow SQL standard (any comparison with NULL yields NULL, not true/false)
 - **Full UTF-8 support** — identifiers, string literals, and all data are UTF-8 throughout; no other character encoding exists
 - **Double-quoted identifiers** — use reserved words as identifiers, preserve exact casing (`"select"`, `"Order"`), Unicode identifiers (`"café"`, `"名前"`)
 - **WAL migration** — versioned WAL format with opt-in `--migrate` flag and backup preservation
@@ -809,6 +810,7 @@ SHOW MEMORY;
 - **Comparisons**: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
 - **Pattern matching**: `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`
 - **IN predicate**: `IN (v1, v2, ...)`, `NOT IN (v1, v2, ...)`
+- **BETWEEN predicate**: `BETWEEN low AND high`, `NOT BETWEEN low AND high`
 - **Arithmetic**: `+`, `-`, `*`, `/`, `%` (integer and float, with implicit int→float promotion)
 - **Concatenation**: `||` (text, with implicit coercion)
 - **Unary minus**: `-expr`
@@ -851,6 +853,14 @@ SELECT * FROM t WHERE id IN (1 + 1, 4);            -- expressions in list
 
 NULL behavior: if the LHS is NULL, the result is always NULL. If no match is found and the list contains NULL, the result is NULL (not false). This means `NOT IN` with a NULL in the list never returns true for non-matching values — a common SQL gotcha.
 
+**BETWEEN predicate.** `BETWEEN` tests whether a value falls within an inclusive range. `NOT BETWEEN` negates the test. If any of the three operands is NULL, the result is NULL.
+
+```sql
+SELECT * FROM t WHERE id BETWEEN 1 AND 10;
+SELECT * FROM t WHERE id NOT BETWEEN 5 AND 15;
+SELECT * FROM t WHERE ts BETWEEN '2024-01-01' AND '2024-12-31';
+```
+
 **Implicit type coercion.** When comparing a column to a literal of a different type, the literal is automatically coerced to the column's type at compile time. This applies to all comparison operators (`=`, `!=`, `<`, `>`, `<=`, `>=`) and `IN` lists. Invalid coercions produce an error with SQLSTATE `22P02`.
 
 ```sql
@@ -869,7 +879,7 @@ SELECT * FROM t WHERE id = 'hello';  -- ERROR: invalid input syntax for type int
 
 Supported coercion paths: string→integer, string→float, string→boolean (`true/false/t/f/1/0`), string→timestamp, int→float, float→int (whole numbers only), int→text, float→text, bool→text.
 
-Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / `[NOT] LIKE` / `[NOT] ILIKE` / `[NOT] IN` / `IS [NOT] NULL` → `+` `-` `||` → `*` `/` `%` → unary `-` → primary.
+Operator precedence (lowest to highest): `OR` → `AND` → `NOT` → comparisons / `[NOT] LIKE` / `[NOT] ILIKE` / `[NOT] IN` / `[NOT] BETWEEN` / `IS [NOT] NULL` → `+` `-` `||` → `*` `/` `%` → unary `-` → primary.
 
 ### Comments
 

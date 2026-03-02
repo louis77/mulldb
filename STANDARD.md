@@ -66,7 +66,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | ID | Feature | Status |
 |----|---------|--------|
 | E061-01 | Comparison predicate | **Done** (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`) |
-| E061-02 | BETWEEN predicate | Open |
+| E061-02 | BETWEEN predicate | **Done** (`BETWEEN` and `NOT BETWEEN`; inclusive bounds; SQL-standard NULL propagation) |
 | E061-03 | IN predicate with list of values | **Done** (`IN (v1, v2, ...)` and `NOT IN (v1, v2, ...)`; SQL-standard three-valued NULL logic) |
 | E061-04 | LIKE predicate | **Done** (`LIKE`, `NOT LIKE`, plus PostgreSQL `ILIKE`/`NOT ILIKE` for case-insensitive matching) |
 | E061-05 | LIKE predicate: ESCAPE clause | **Done** (`LIKE pattern ESCAPE char`; single-character escape) |
@@ -369,7 +369,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 - `INDEXED BY <name>` — explicit secondary index selection
 
 ### Biggest gaps to close
-1. **Predicates**: BETWEEN, IN
+1. **Predicates**: BETWEEN and IN are done; quantified comparisons (ANY/ALL) and EXISTS remain
 2. **Expressions**: CASE, COALESCE (arithmetic and `::` cast are done; SQL-standard `CAST(expr AS type)` not yet)
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet

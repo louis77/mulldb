@@ -84,6 +84,7 @@ const (
 	TokenAdd         // ADD
 	TokenColumn      // COLUMN
 	TokenIn          // IN
+	TokenBetween     // BETWEEN
 	TokenFloatKW     // FLOAT (data type keyword)
 	TokenDoubleKW    // DOUBLE (first word of DOUBLE PRECISION)
 	TokenIndex       // INDEX
@@ -164,6 +165,7 @@ var tokenNames = map[TokenType]string{
 	TokenAdd:         "ADD",
 	TokenColumn:      "COLUMN",
 	TokenIn:          "IN",
+	TokenBetween:     "BETWEEN",
 	TokenFloatKW:     "FLOAT",
 	TokenDoubleKW:    "DOUBLE",
 	TokenIndex:       "INDEX",
@@ -241,6 +243,7 @@ var keywords = map[string]TokenType{
 	"ADD":         TokenAdd,
 	"COLUMN":      TokenColumn,
 	"IN":          TokenIn,
+	"BETWEEN":     TokenBetween,
 	"FLOAT":       TokenFloatKW,
 	"DOUBLE":      TokenDoubleKW,
 	"INDEX":       TokenIndex,

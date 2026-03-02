@@ -274,6 +274,9 @@ func compileCorrelatedExpr(expr parser.Expr, innerDef *storage.TableDef, innerAl
 	case *parser.InExpr:
 		return compileCorrelatedInExpr(e, innerDef, innerAlias, outerDef, outerAlias)
 
+	case *parser.BetweenExpr:
+		return compileCorrelatedBetweenExpr(e, innerDef, innerAlias, outerDef, outerAlias)
+
 	case *parser.FunctionCallExpr:
 		fn, ok := scalarRegistry[e.Name]
 		if !ok {
@@ -587,6 +590,45 @@ func compileCorrelatedInExpr(e *parser.InExpr, innerDef *storage.TableDef, inner
 			return nil
 		}
 		return not
+	}, nil
+}
+
+// compileCorrelatedBetweenExpr compiles a BETWEEN expression in correlated context.
+func compileCorrelatedBetweenExpr(e *parser.BetweenExpr, innerDef *storage.TableDef, innerAlias string, outerDef *storage.TableDef, outerAlias string) (correlatedFunc, error) {
+	exprFn, err := compileCorrelatedExpr(e.Expr, innerDef, innerAlias, outerDef, outerAlias)
+	if err != nil {
+		return nil, err
+	}
+	lowFn, err := compileCorrelatedExpr(e.Low, innerDef, innerAlias, outerDef, outerAlias)
+	if err != nil {
+		return nil, err
+	}
+	highFn, err := compileCorrelatedExpr(e.High, innerDef, innerAlias, outerDef, outerAlias)
+	if err != nil {
+		return nil, err
+	}
+	not := e.Not
+
+	return func(ir, or storage.Row) any {
+		v := exprFn(ir, or)
+		lo := lowFn(ir, or)
+		hi := highFn(ir, or)
+		if v == nil || lo == nil || hi == nil {
+			return nil
+		}
+		cmpLo := storage.CompareValues(v, lo)
+		if cmpLo == -2 {
+			return nil
+		}
+		cmpHi := storage.CompareValues(v, hi)
+		if cmpHi == -2 {
+			return nil
+		}
+		result := cmpLo >= 0 && cmpHi <= 0
+		if not {
+			result = !result
+		}
+		return result
 	}, nil
 }
 

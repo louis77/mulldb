@@ -12,7 +12,7 @@ Building a lightweight SQL database from scratch in Go as a usable tool for ligh
 | Wire protocol | PostgreSQL v3 (simple query flow) |
 | Auth | Cleartext password (AuthenticationCleartextPassword) |
 | Parser | Hand-written lexer + recursive descent parser |
-| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. `CREATE [UNIQUE] INDEX`, `DROP INDEX`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). IN predicate (`IN`, `NOT IN`). Double-quoted identifiers for reserved words and case preservation. |
+| SQL scope | Minimal CRUD: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` (`ADD COLUMN`, `DROP COLUMN`), `INSERT`, `SELECT` (with `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `INNER JOIN`), `UPDATE`, `DELETE`. `CREATE [UNIQUE] INDEX`, `DROP INDEX`. Arithmetic expressions (`+`, `-`, `*`, `/`, `%`, unary minus). Pattern matching (`LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `ESCAPE`). IN predicate (`IN`, `NOT IN`). BETWEEN predicate (`BETWEEN`, `NOT BETWEEN`). Double-quoted identifiers for reserved words and case preservation. |
 | Data types | `INTEGER`, `FLOAT` (64-bit IEEE 754), `TEXT`, `BOOLEAN`, `TIMESTAMP` (UTC-only) |
 | Storage engine | Append-only data log + in-memory index (rebuilt on startup) |
 | Durability | Write-ahead log (WAL) — every mutation logged before applied |
@@ -322,20 +322,22 @@ All features described in the README have been **verified as implemented**:
 | Category | Features |
 |----------|----------|
 | **Wire Protocol** | PG v3 startup handshake, cleartext auth, SimpleQuery, all message types (RowDescription, DataRow, CommandComplete, ErrorResponse, ReadyForQuery) |
-| **SQL Parser** | CREATE/DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), INSERT, SELECT, UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK |
-| **SELECT Features** | WHERE, ORDER BY (multi-column, NULLs last), LIMIT/OFFSET, INNER JOIN (multi-table, aliases, qualified columns), column aliases (AS) |
-| **Expressions** | Arithmetic (`+`, `-`, `*`, `/`, `%`, unary `-`), string concatenation (`||`), comparisons, logical operators (AND/OR/NOT), IS NULL/IS NOT NULL, IN/NOT IN |
+| **SQL Parser** | CREATE/DROP TABLE, ALTER TABLE (ADD/DROP COLUMN), CREATE/DROP INDEX, INSERT, SELECT, UPDATE, DELETE, BEGIN/COMMIT/ROLLBACK |
+| **SELECT Features** | WHERE, ORDER BY (multi-column, NULLs last), LIMIT/OFFSET, INNER JOIN (multi-table, aliases, qualified columns), GROUP BY, column aliases (AS), INDEXED BY |
+| **Expressions** | Arithmetic (`+`, `-`, `*`, `/`, `%`, unary `-`), string concatenation (`||`), comparisons, logical operators (AND/OR/NOT), IS NULL/IS NOT NULL, IN/NOT IN, implicit type coercion for comparisons |
 | **Pattern Matching** | LIKE/NOT LIKE, ILIKE/NOT ILIKE (case-insensitive), ESCAPE clause, Unicode-aware `_` and `%` |
 | **IN Predicate** | IN/NOT IN with value lists, SQL-standard three-valued NULL logic |
 | **Data Types** | INTEGER (64-bit), FLOAT (64-bit IEEE 754, aliases: DOUBLE PRECISION), TEXT, BOOLEAN, TIMESTAMP (UTC-only), NULL |
-| **Constraints** | PRIMARY KEY (single-column only) with B-tree index enforcement; NOT NULL column constraints with INSERT/UPDATE validation |
+| **Constraints** | PRIMARY KEY (single-column only) with B-tree index enforcement; NOT NULL column constraints with INSERT/UPDATE validation; UNIQUE indexes |
+| **Indexes** | Secondary indexes (`CREATE [UNIQUE] INDEX`/`DROP INDEX`), table-scoped names, auto-generated names, NULL handling, explicit `INDEXED BY` for query acceleration |
+| **Transactions** | BEGIN/COMMIT/ROLLBACK with deferred-execution overlay (TxOverlay), READ COMMITTED isolation, crash-safe via WAL opBeginTx/opCommitTx markers, DDL rejected inside transactions, error-in-transaction state |
 | **Functions** | COUNT(*)/COUNT(col), SUM, MIN, MAX, LENGTH/CHAR_LENGTH/CHARACTER_LENGTH, OCTET_LENGTH, CONCAT, NOW, VERSION, ABS, ROUND, CEIL/CEILING, FLOOR, POWER/POW, SQRT, MOD |
 | **Identifiers** | Double-quoted identifiers (preserve case, reserved words), UTF-8 throughout |
 | **Comments** | Single-line (`--`) and nested block (`/* */`) |
-| **Catalog Tables** | pg_type, pg_database, pg_namespace, information_schema.tables, information_schema.columns, information_schema.table_constraints, information_schema.key_column_usage |
-| **Storage** | Split WAL (catalog.wal + per-table WALs), CRC32 checksums, fsync, WAL replay, WAL migration (v1→v2→v3→v4, single→split), batched WAL writes (single entry + single fsync for multi-row INSERT/UPDATE/DELETE) |
+| **Catalog Tables** | pg_type, pg_database, pg_namespace, pg_class, information_schema.tables, information_schema.columns, information_schema.table_constraints, information_schema.key_column_usage |
+| **Storage** | Split WAL (catalog.wal + per-table WALs), CRC32 checksums, configurable fsync (SET/SHOW FSYNC), WAL replay, WAL migration (v1→v2→v3→v4, single→split), batched WAL writes (single entry + single fsync for multi-row INSERT/UPDATE/DELETE) |
 | **Concurrency** | Per-table locking (RW mutex), concurrent writes to independent tables, multiple readers |
-| **Observability** | Statement tracing (SET trace = on/off, SHOW TRACE), SQLSTATE error codes |
+| **Observability** | Statement tracing (SET trace = on/off, SHOW TRACE), SHOW MEMORY (deep memory introspection per table/index), SQLSTATE error codes |
 
 ### 🎯 Missing Features for MVP
 
@@ -356,10 +358,10 @@ The following features are **required** to move from "correct prototype" to "min
 | Priority | Feature | Gap Analysis | Implementation Notes |
 |----------|---------|--------------|---------------------|
 | P1 | **Subqueries** (`IN (SELECT ...)`, `EXISTS`, correlated) | `IN` with value lists is implemented; subquery form (`IN (SELECT ...)`) is not. Cannot express "find orders where total > avg" or "users in CA". Parser rejects subqueries entirely. | Requires AST nodes for subqueries, executor support for correlated evaluation (row-by-row subquery execution) or unnesting. |
-| P1 | **GROUP BY + HAVING** | GROUP BY implemented for single-table queries with column references. HAVING not yet supported. Cannot do "categories with >5 items". | GROUP BY done (hash-based aggregation). HAVING needs post-aggregation filter. |
+| ~~P1~~ | ~~**GROUP BY**~~ + **HAVING** | ✅ GROUP BY done. Hash-based aggregation for single-table queries with column references. NULLs group together per SQL standard. HAVING not yet supported — cannot do "categories with >5 items". | HAVING needs post-aggregation filter on grouped results. |
 | P1 | **LEFT OUTER JOIN** | Only INNER JOIN implemented. Missing rows from left table are silently dropped. | Extend parser for LEFT/RIGHT/FULL keywords, executor needs to preserve outer side rows with NULL padding. |
 | P1 | **Prepared Statements** | Only SimpleQuery protocol. No parameter binding (`$1`, `$2`). SQL injection risk, re-parsing overhead. | Need Extended Query protocol (Parse, Bind, Execute, Close), portal/cursor management, param type inference. |
-| P1 | **Savepoints** | Without transactions, partial rollback is impossible. Complex operations are all-or-nothing at statement level. | Depends on Tier 1 transactions. Need nested transaction state, partial rollback to savepoint. |
+| P1 | **Savepoints** | Transactions implemented but no partial rollback. Complex operations are all-or-nothing at statement level. | Need nested transaction state with TxOverlay snapshots, partial rollback to savepoint. |
 
 #### Tier 3: Solid (Production-Grade)
 
@@ -368,7 +370,7 @@ The following features are **required** to move from "correct prototype" to "min
 | ~~P2~~ | ~~**CREATE/DROP INDEX**~~ | ✅ Done. See Secondary Indexes in Tier 1. | Implemented in Phase 7. |
 | P2 | **Advanced ALTER TABLE** | Only ADD/DROP COLUMN. Cannot rename columns, change types, add constraints without table rebuild. | Ordinals currently immutable; need column rename metadata-only ops, type coercion for ALTER COLUMN. |
 | P2 | **Views** | No way to encapsulate complex queries. No security through abstraction. | View metadata in catalog, view expansion in executor (replace view ref with subquery). |
-| P2 | **Basic Query Optimizer** | No statistics; nested-loop joins only; no index-vs-scan decision. Query performance unpredictable. | Need table statistics (row counts, distinct values), cost model, join ordering heuristics. |
+| P2 | **Basic Query Optimizer** | PK index used automatically for `pk = literal`; secondary indexes require explicit `INDEXED BY`. No statistics, nested-loop joins only, no cost-based index selection. | Need table statistics (row counts, distinct values), cost model, automatic index selection, join ordering heuristics. |
 | P2 | **Row-Level Locking / MVCC** | Current table-level RWMutex blocks all writers and prevents reader-writer concurrency on same table. | Replace table mutex with row-level locks or MVCC (multi-version concurrency control) with snapshot isolation. |
 
 ### 📋 Recommended Implementation Roadmap

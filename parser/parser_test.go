@@ -2368,3 +2368,90 @@ func TestParse_NestFormatUnsupported(t *testing.T) {
 		t.Fatal("expected error for unsupported NEST format")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// BETWEEN
+// ---------------------------------------------------------------------------
+
+func TestParse_Between(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x BETWEEN 1 AND 10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	be, ok := sel.Where.(*BetweenExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *BetweenExpr", sel.Where)
+	}
+	assertColumnRef(t, be.Expr, "x")
+	assertIntLit(t, be.Low, 1)
+	assertIntLit(t, be.High, 10)
+	if be.Not {
+		t.Error("Not = true, want false")
+	}
+}
+
+func TestParse_NotBetween(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x NOT BETWEEN 1 AND 10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	be, ok := sel.Where.(*BetweenExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *BetweenExpr", sel.Where)
+	}
+	if !be.Not {
+		t.Error("Not = false, want true")
+	}
+}
+
+func TestParse_BetweenWithExpressions(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x BETWEEN 1 + 1 AND y * 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	be := sel.Where.(*BetweenExpr)
+	if _, ok := be.Low.(*BinaryExpr); !ok {
+		t.Fatalf("Low = %T, want *BinaryExpr", be.Low)
+	}
+	if _, ok := be.High.(*BinaryExpr); !ok {
+		t.Fatalf("High = %T, want *BinaryExpr", be.High)
+	}
+}
+
+func TestParse_BetweenCombinedWithAnd(t *testing.T) {
+	stmt, err := Parse("SELECT * FROM t WHERE x BETWEEN 1 AND 10 AND y = 5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	bin, ok := sel.Where.(*BinaryExpr)
+	if !ok || bin.Op != "AND" {
+		t.Fatalf("WHERE = %T (op=%v), want AND", sel.Where, bin)
+	}
+	if _, ok := bin.Left.(*BetweenExpr); !ok {
+		t.Fatalf("left = %T, want *BetweenExpr", bin.Left)
+	}
+}
+
+func TestParse_NotExprWithBetween(t *testing.T) {
+	// "NOT x BETWEEN 1 AND 10" should parse as NOT (x BETWEEN 1 AND 10)
+	stmt, err := Parse("SELECT * FROM t WHERE NOT x BETWEEN 1 AND 10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := stmt.(*SelectStmt)
+	not, ok := sel.Where.(*NotExpr)
+	if !ok {
+		t.Fatalf("WHERE = %T, want *NotExpr", sel.Where)
+	}
+	be, ok := not.Expr.(*BetweenExpr)
+	if !ok {
+		t.Fatalf("inner = %T, want *BetweenExpr", not.Expr)
+	}
+	if be.Not {
+		t.Error("inner BetweenExpr.Not = true, want false")
+	}
+}

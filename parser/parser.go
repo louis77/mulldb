@@ -887,6 +887,33 @@ func (p *parser) parseComparison() (Expr, error) {
 		return &InExpr{Expr: left, Values: values, Not: inNot}, nil
 	}
 
+	// [NOT] BETWEEN low AND high
+	betweenNot := false
+	if p.cur.Type == TokenNot {
+		savedPos, savedCh, savedWidth, savedCur := p.lexer.pos, p.lexer.ch, p.lexer.width, p.cur
+		p.next()
+		if p.cur.Type == TokenBetween {
+			betweenNot = true
+		} else {
+			p.lexer.pos, p.lexer.ch, p.lexer.width, p.cur = savedPos, savedCh, savedWidth, savedCur
+		}
+	}
+	if p.cur.Type == TokenBetween {
+		p.next()
+		low, err := p.parseAdditive()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(TokenAnd); err != nil {
+			return nil, err
+		}
+		high, err := p.parseAdditive()
+		if err != nil {
+			return nil, err
+		}
+		return &BetweenExpr{Expr: left, Low: low, High: high, Not: betweenNot}, nil
+	}
+
 	var op string
 	switch p.cur.Type {
 	case TokenEq:

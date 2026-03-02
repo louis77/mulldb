@@ -452,7 +452,7 @@ func (e *Executor) execSelect(s *parser.SelectStmt, tr *Trace) (*Result, error) 
 	}
 
 	// Resolve which columns to return.
-	colEvals, resultCols, err := resolveSelectColumns(s.Columns, def)
+	colEvals, resultCols, err := e.resolveSelectColumns(s.Columns, def, s.FromAlias)
 	if err != nil {
 		return nil, WrapError(err)
 	}
@@ -1754,6 +1754,13 @@ func compileJoinExpr(expr parser.Expr, scope *joinScope) (exprFunc, error) {
 			return coerceJoinInValues(lhs, values, valFns, scope)
 		})
 
+	case *parser.BetweenExpr:
+		return compileBetweenExprCoerced(e, func(expr parser.Expr) (exprFunc, error) {
+			return compileJoinExpr(expr, scope)
+		}, func(leftExpr, rightExpr parser.Expr, left, right exprFunc) (exprFunc, exprFunc, error) {
+			return tryCoerceJoinOperands(leftExpr, rightExpr, left, right, scope)
+		})
+
 	case *parser.CastExpr:
 		inner, err := compileJoinExpr(e.Expr, scope)
 		if err != nil {
@@ -2437,7 +2444,7 @@ func (e *Executor) execDelete(s *parser.DeleteStmt, tr *Trace) (*Result, error) 
 // Column resolution
 // -------------------------------------------------------------------------
 
-func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFunc, []Column, error) {
+func (exec *Executor) resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef, fromAlias string) ([]exprFunc, []Column, error) {
 	var evals []exprFunc
 	var cols []Column
 
@@ -2559,6 +2566,16 @@ func resolveSelectColumns(exprs []parser.Expr, def *storage.TableDef) ([]exprFun
 				name = alias
 			}
 			cols = append(cols, Column{Name: name, TypeOID: castTypeOID(e.TypeName), TypeSize: castTypeSize(e.TypeName)})
+		case *parser.NestExpr:
+			eval, col, err := exec.compileNestColumn(e, def, fromAlias)
+			if err != nil {
+				return nil, nil, err
+			}
+			if alias != "" {
+				col.Name = alias
+			}
+			evals = append(evals, eval)
+			cols = append(cols, col)
 		default:
 			compiled, err := compileExpr(inner, def)
 			if err != nil {
@@ -2679,6 +2696,13 @@ func compileExpr(expr parser.Expr, def *storage.TableDef) (exprFunc, error) {
 			return compileExpr(expr, def)
 		}, func(lhs parser.Expr, values []parser.Expr, valFns []exprFunc) ([]exprFunc, error) {
 			return coerceInValues(lhs, values, valFns, def)
+		})
+
+	case *parser.BetweenExpr:
+		return compileBetweenExprCoerced(e, func(expr parser.Expr) (exprFunc, error) {
+			return compileExpr(expr, def)
+		}, func(leftExpr, rightExpr parser.Expr, left, right exprFunc) (exprFunc, exprFunc, error) {
+			return tryCoerceOperands(leftExpr, rightExpr, left, right, def)
 		})
 
 	case *parser.CastExpr:
@@ -2896,6 +2920,97 @@ func compileInExprCoerced(
 			return nil
 		}
 		return not
+	}, nil
+}
+
+// compileBetweenExpr compiles a BetweenExpr using the provided compile function.
+func compileBetweenExpr(e *parser.BetweenExpr, compile func(parser.Expr) (exprFunc, error)) (exprFunc, error) {
+	exprFn, err := compile(e.Expr)
+	if err != nil {
+		return nil, err
+	}
+	lowFn, err := compile(e.Low)
+	if err != nil {
+		return nil, err
+	}
+	highFn, err := compile(e.High)
+	if err != nil {
+		return nil, err
+	}
+	not := e.Not
+	return func(r storage.Row) any {
+		v := exprFn(r)
+		lo := lowFn(r)
+		hi := highFn(r)
+		if v == nil || lo == nil || hi == nil {
+			return nil
+		}
+		cmpLo := storage.CompareValues(v, lo)
+		if cmpLo == -2 {
+			return nil
+		}
+		cmpHi := storage.CompareValues(v, hi)
+		if cmpHi == -2 {
+			return nil
+		}
+		result := cmpLo >= 0 && cmpHi <= 0
+		if not {
+			result = !result
+		}
+		return result
+	}, nil
+}
+
+// compileBetweenExprCoerced is like compileBetweenExpr but applies type coercion
+// to the low and high bounds at compile time.
+func compileBetweenExprCoerced(
+	e *parser.BetweenExpr,
+	compile func(parser.Expr) (exprFunc, error),
+	coercePair func(parser.Expr, parser.Expr, exprFunc, exprFunc) (exprFunc, exprFunc, error),
+) (exprFunc, error) {
+	exprFn, err := compile(e.Expr)
+	if err != nil {
+		return nil, err
+	}
+	lowFn, err := compile(e.Low)
+	if err != nil {
+		return nil, err
+	}
+	highFn, err := compile(e.High)
+	if err != nil {
+		return nil, err
+	}
+	// Coerce low bound against expr type.
+	exprFn, lowFn, err = coercePair(e.Expr, e.Low, exprFn, lowFn)
+	if err != nil {
+		return nil, err
+	}
+	// Coerce high bound against expr type.
+	exprFn, highFn, err = coercePair(e.Expr, e.High, exprFn, highFn)
+	if err != nil {
+		return nil, err
+	}
+	not := e.Not
+	return func(r storage.Row) any {
+		v := exprFn(r)
+		lo := lowFn(r)
+		hi := highFn(r)
+		if v == nil || lo == nil || hi == nil {
+			return nil
+		}
+		cmpLo := storage.CompareValues(v, lo)
+		if cmpLo == -2 {
+			return nil
+		}
+		cmpHi := storage.CompareValues(v, hi)
+		if cmpHi == -2 {
+			return nil
+		}
+		result := cmpLo >= 0 && cmpHi <= 0
+		if not {
+			result = !result
+		}
+		return result
 	}, nil
 }
 
