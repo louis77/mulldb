@@ -292,7 +292,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 | F261-01 | Simple CASE | Open |
 | F261-02 | Searched CASE | Open |
 | F261-03 | NULLIF | Open |
-| F261-04 | COALESCE | Open |
+| F261-04 | COALESCE | **Done** |
 
 ## F311 — Schema definition statement
 
@@ -347,9 +347,9 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 | Status | Count |
 |--------|-------|
-| **Done** | ~49 |
+| **Done** | ~50 |
 | **Partial** | ~9 |
-| **Open** | ~120 |
+| **Open** | ~119 |
 
 ### Strongest areas
 - Basic CRUD (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
@@ -370,7 +370,7 @@ All character data is UTF-8. There is no encoding configuration, no `CHARACTER S
 
 ### Biggest gaps to close
 1. **Predicates**: BETWEEN and IN are done; quantified comparisons (ANY/ALL) and EXISTS remain
-2. **Expressions**: CASE, COALESCE (arithmetic and `::` cast are done; SQL-standard `CAST(expr AS type)` not yet)
+2. **Expressions**: CASE expressions (arithmetic and `::` cast are done; SQL-standard `CAST(expr AS type)` not yet)
 3. **GROUP BY / HAVING**: Aggregates currently only work across whole tables
 4. **JOINs**: INNER JOIN supported; LEFT/RIGHT/FULL OUTER JOINs not yet
 5. **Transactions**: ~~No BEGIN / COMMIT / ROLLBACK~~ ✅ Done (BEGIN/COMMIT/ROLLBACK with READ COMMITTED isolation; no SAVEPOINT or SET TRANSACTION)

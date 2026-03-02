@@ -589,6 +589,7 @@ Scalar functions return a single value per row. They can be used in `SELECT` col
 | `POWER(x, y)` / `POW(x, y)` | 2 numeric | `FLOAT` | `x` raised to the power `y` |
 | `SQRT(x)` | 1 numeric | `FLOAT` | Square root (error on negative input, SQLSTATE `2201F`) |
 | `MOD(x, y)` | 2 numeric | same as input | Modulo (error on `y=0`, SQLSTATE `22012`) |
+| `COALESCE(val, ...)` | 1+ any | same as first non-NULL | Returns the first non-NULL value from its arguments; returns NULL if all arguments are NULL |
 | `NOW()` | 0 | `TIMESTAMP` | Current UTC timestamp |
 | `VERSION()` | 0 | `TEXT` | PostgreSQL-compatible version string identifying the mulldb build |
 
@@ -634,6 +635,34 @@ SELECT VERSION();
 ```
 
 Calling an unknown function returns SQLSTATE `42883`. Calling a function with the wrong number of arguments or wrong type also returns `42883`.
+
+**COALESCE examples:**
+
+```sql
+SELECT COALESCE(NULL, 'a', 'b');
+--  coalesce
+-- ----------
+--  a
+
+SELECT COALESCE(1, 2, 3);
+--  coalesce
+-- ----------
+--         1
+
+SELECT COALESCE(NULL, NULL);
+--  coalesce
+-- ----------
+--  (NULL)
+
+CREATE TABLE t (a TEXT, b TEXT);
+INSERT INTO t VALUES ('first', 'second'), (NULL, 'fallback');
+
+SELECT COALESCE(a, b) FROM t;
+--  coalesce
+-- ----------
+--  first
+--  fallback
+```
 
 ### NEST (Correlated Subquery)
 
